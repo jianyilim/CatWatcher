@@ -293,7 +293,9 @@ def connect(d):
     if not pw: return {'ok': False, 'msg': 'Please type the camera password.'}
     t, ok = tries_ok(ip)
     if not ok: return {'ok': False, 'msg': 'Stopped after 3 wrong tries so the camera does not lock you out. Wait 30 minutes and check the password.'}
-    try: url, why = S.probe_rtsp(ip, user, pw, d.get('brand', ''))
+    try: ch = max(1, min(64, int(d.get('channel') or 1)))
+    except Exception: ch = 1
+    try: url, why = S.probe_rtsp(ip, user, pw, d.get('brand', ''), ch)
     except Exception as ex: return {'ok': False, 'msg': 'Could not test the camera: ' + repr(ex)[:80]}
     if not url and why == 'timeout':           # no login happened, so this does not count as a wrong try
         return {'ok': False, 'msg': 'The camera did not answer in time. It may be busy; try again in a minute. This did not count as a wrong password.'}
@@ -306,6 +308,7 @@ def connect(d):
         while cam(c, f'cam{n}'): n += 1
         ex = {'id': f'cam{n}'}; c['cams'].append(ex)
     ex.update({'name': name, 'ip': ip, 'user': user, 'pw': pw, 'brand': d.get('brand', ''), 'source': url})
+    if 'Hikvision' in d.get('brand', ''): ex['channel'] = ch
     if d.get('cloud_pw'): ex['cloud_pw'] = d['cloud_pw']
     save(c)
     return {'ok': True, 'msg': f'Added "{name}".'}

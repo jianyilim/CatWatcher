@@ -78,7 +78,16 @@ def identify(ip):
             try: page = he.read(4000).decode('utf8', 'ignore')
             except Exception: page = ''
             srv = (he.headers.get('Server') or '') + ' ' + (he.headers.get('WWW-Authenticate') or '') + ' ' + page
-            if he.code == 401 and re.search(r'App-webs|DNVRS-Webs|DVRDVS-Webs|hikvision\.com|Hikvision', srv, re.I): brand = 'Hikvision'
+            if he.code == 401 and (re.search(r'App-webs|DNVRS-Webs|DVRDVS-Webs|hikvision\.com|Hikvision', srv, re.I)
+                                   or re.search(r'realm="(IP Camera\(|DS-|NVR\(|DVR\()', srv)
+                                   or port_open(ip, 8000)):          # 8000 is Hikvision's own device port
+                brand = 'Hikvision'
+        except Exception:
+            pass
+    if not brand and port_open(ip, 80):
+        try:                                     # Hikvision's web page sends the browser to /doc/...
+            home = urllib.request.urlopen(f'http://{ip}/', timeout=5).read(3000).decode('utf8', 'ignore')
+            if re.search(r'/doc/page/login\.asp|/doc/index\.html', home): brand = 'Hikvision'
         except Exception:
             pass
     if brand or rtsp:
@@ -102,15 +111,16 @@ def write_json(path, obj):
             if i == 19: raise
             time.sleep(0.05)
 
-def try_rtsp(ip, user, pw, brand=''):
-    return probe_rtsp(ip, user, pw, brand)[0]
+def try_rtsp(ip, user, pw, brand='', channel=1):
+    return probe_rtsp(ip, user, pw, brand, channel)[0]
 
-def probe_rtsp(ip, user, pw, brand=''):
+def probe_rtsp(ip, user, pw, brand='', channel=1):
     """Returns (url, why). why is '' on success, 'password' if the camera refused the login, 'timeout' if it never
     answered, or 'other'. A refused login stops at the first address, so the camera counts only one failure."""
     from urllib.parse import quote
     why = 'other'
-    paths = ('Streaming/Channels/101', 'Streaming/Channels/102') if 'Hikvision' in (brand or '') else \
+    ch = max(1, int(channel or 1))
+    paths = (f'Streaming/Channels/{ch}01', f'Streaming/Channels/{ch}02') if 'Hikvision' in (brand or '') else \
             ('stream1', 'stream2') if 'TP-Link' in (brand or '') else ('stream1', 'Streaming/Channels/101', 'stream2')
     for path in paths:
         url = f'rtsp://{quote(user, safe="")}:{quote(pw, safe="")}@{ip}:554/{path}'
