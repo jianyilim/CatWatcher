@@ -274,9 +274,7 @@ def scan(hosts_arg):
     if hosts_arg:
         hosts = [h.strip() for h in hosts_arg.split(',') if private(h.strip())]
     else:
-        me = S.local_ip(); base = '.'.join(me.split('.')[:3])
-        hosts = [f'{base}.{i}' for i in range(1, 255) if f'{base}.{i}' != me]
-        hosts = sorted(set(hosts) | {h for h in S.onvif_discovery(2.0) if private(h)})
+        hosts = sorted(set(S.lan_hosts()) | {h for h in S.onvif_discovery(2.0) if private(h)})
     cams = S.scan(hosts); have = {c['ip'] for c in load()['cams']}
     return [{'ip': ip, 'brand': cams[ip][0], 'rtsp': cams[ip][1]['rtsp_port_open'], 'added': ip in have}
             for ip in sorted(cams, key=lambda x: tuple(int(p) for p in x.split('.')))]
