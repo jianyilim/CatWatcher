@@ -283,7 +283,7 @@ def snapshots(limit=5000):
 # ---------- a video of the minute before and after a photo ----------
 CLIPS = os.path.join(OUT, '_clips'); clip_jobs = {}
 def camkey(x): return re.sub(r'[^A-Za-z0-9_-]+', '-', x.get('name', 'camera')).strip('-') or x['id']
-SPANS = (10, 30, 60, 120)
+SPANS = (5, 10, 30, 60, 120)
 def span_of(v):
     try: v = int(float(v))
     except Exception: v = 10
