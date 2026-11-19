@@ -529,7 +529,7 @@ def history(a, det, cfg):
         real = (k / 2.0) * scale
         if not hit_end and (nb < 300000 or k < 10):
             fails += 1; log(a.out, 'no video for', datetime.datetime.fromtimestamp(base).strftime('%d/%m %H:%M'), 'error', err)
-            if 'busy' in str(err).lower() or '52405' in str(err): busy_seen = True
+            if err not in (0, '0', None, ''): busy_seen = True    # busy, not answering, or cut off: come back to it later (0 = nothing recorded)
             midnight = datetime.datetime.combine(datetime.date.fromtimestamp(base) + datetime.timedelta(days=1), datetime.time()).timestamp()
             if 0 < midnight - base <= 60 and not busy_seen:      # end of the day's recordings: go straight on to the next day
                 act(f'Reached the end of {datetime.datetime.fromtimestamp(base).strftime("%a %d %b")} recordings, carrying on from midnight')
