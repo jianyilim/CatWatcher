@@ -1,0 +1,6 @@
+# local environment and large/downloaded files
+venv/
+__pycache__/
+*.pt
+*.log
+.DS_Store
