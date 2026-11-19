@@ -196,12 +196,20 @@ def file_start_time(path):
         except Exception: pass
     return os.path.getmtime(path), 'from the file date (may be off)'
 
-def check_file(path, base, det, step=2.0, progress=None, stop_at=None, start_at=None):
+def video_size(path, width=1280):
+    """Frame size keeping the video's own shape (Tesla cameras are not 16:9)."""
+    try:
+        w, h = [int(v) for v in subprocess.run(['ffprobe', '-v', 'error', '-select_streams', 'v:0', '-show_entries', 'stream=width,height', '-of', 'csv=p=0', path], capture_output=True, text=True, timeout=20).stdout.split(',')[:2]]
+        return width, int(round(width * h / w / 2)) * 2
+    except Exception:
+        return 1280, 720
+
+def check_file(path, base, det, step=2.0, progress=None, stop_at=None, start_at=None, size=(1280, 720)):
     """Checks an ordinary real-time video: one frame every `step` seconds, timed from `base`. Returns seconds covered."""
     det.reset(); k = 0
     skip = max(0.0, (start_at or 0) - base)    # jump straight to the search window instead of decoding up to it
     base += skip
-    for k, fr in enumerate(frames(path, 1.0 / step, seek=skip)):
+    for k, fr in enumerate(frames(path, 1.0 / step, w=size[0], h=size[1], seek=skip)):
         t = base + k * step
         if stop_at and t > stop_at: break
         det.feed(fr, t)
@@ -318,7 +326,7 @@ def files_mode(a, det):
         def prog(t, done=done):
             el = time.time() - started; cov = max(1, done + (t - s))
             pr.P(pos=t, eta=max(0, (total - cov) * el / cov))
-        check_file(f, s, det, step=step, progress=prog)
+        check_file(f, s, det, step=step, progress=prog, size=video_size(f) if tes else (1280, 720))
         done += d; new = det.found - before
         pr.act(f'Checked {os.path.basename(f)} ({pr.fmt(s)} - {pr.fmt(s + d)}, time {how}): ' + (plural(new, 'possible cat') if new else 'no cats') + (f', {plural(det.moves - mv0, "movement")}' if det.moves - mv0 else ''))
     pr.P(status='done', pos=to, msg='Finished', finished=time.time(), eta=0)
