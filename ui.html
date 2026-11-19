@@ -127,7 +127,18 @@ details.more summary{cursor:pointer}
 .frow .bar2 div{height:100%;background:var(--t1);width:0}
 
 /* results */
-.rbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:32px 0 4px}
+.tabs{position:sticky;top:0;z-index:20;display:flex;gap:4px;margin:16px 0 0;padding:10px 0;background:var(--page);border-bottom:1px solid var(--line);overflow-x:auto;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tabs button{flex:none;height:38px;padding:0 16px;border-radius:10px;border:0;background:transparent;color:var(--t2);font:inherit;font-size:15px;font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:8px;transition:background-color 150ms var(--ease),color 150ms var(--ease)}
+.tabs button:hover{color:var(--t1)}
+.tabs button.on{background:var(--card);color:var(--t1);box-shadow:inset 0 0 0 1px var(--line2)}
+.tabs button:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+.tabs .cnt{font-family:var(--mono);font-size:12px;color:var(--t3);font-variant-numeric:tabular-nums}
+.tabs .dot{width:7px;height:7px;border-radius:50%;background:var(--pos)}
+.tabp{display:none}.tabp.on{display:block}
+.tabp > .card:first-child{margin-top:20px}
+.more{display:flex;justify-content:center;margin:24px 0 0}
+.rbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:24px 0 4px}
 .rbar h2{margin:0 12px 0 0;font-size:22px;font-weight:600}
 .seg{display:inline-flex;padding:3px;border-radius:10px;background:var(--raised);gap:2px}
 .seg button{height:30px;padding:0 12px;border:0;border-radius:8px;background:transparent;color:var(--t2);font-size:13px;cursor:pointer;transition:background-color 150ms var(--ease),color 150ms var(--ease)}
@@ -137,6 +148,7 @@ details.more summary{cursor:pointer}
 .rnote{font-size:13px;color:var(--t3);margin:8px 0 0}
 .dayh{margin:24px 0 10px;font-size:13px;color:var(--t3);font-family:var(--mono)}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:16px}
+@media(max-width:600px){.grid{grid-template-columns:1fr 1fr;gap:10px}.shot .meta{font-size:13px;padding:8px 10px}.shot .ts{font-size:10px}.tabs button{padding:0 12px;font-size:14px}.tabs .long{display:none}}
 .shot{background:var(--card);border:1px solid var(--line);border-radius:14px;overflow:hidden;cursor:pointer;box-shadow:var(--shadow);transition:border-color 150ms var(--ease),opacity 150ms var(--ease)}
 .shot:hover{border-color:var(--line2)}
 .shot.dim{opacity:.5}
@@ -214,6 +226,14 @@ footer{margin-top:32px;font-size:13px;color:var(--t3)}
 
   <div class="now" id="now"><span class="d"></span><div class="txt" id="nowtext">Loading</div></div>
 
+  <nav class="tabs" id="tabs" role="tablist" aria-label="Sections">
+    <button role="tab" data-tab="finds">Finds <span class="cnt" id="tcnt"></span></button>
+    <button role="tab" data-tab="search">Search<span class="long">&nbsp;recordings</span> <span class="dot hidden" id="tsrch"></span></button>
+    <button role="tab" data-tab="cams">Cameras <span class="cnt" id="tcams"></span></button>
+    <button role="tab" data-tab="files">Video files</button>
+  </nav>
+
+  <div class="tabp" data-p="search">
   <section class="card">
     <h2>Search recordings</h2>
     <p class="lead">Goes through what your cameras recorded and saves a frame of anything cat-shaped, with the exact time</p>
@@ -230,6 +250,9 @@ footer{margin-top:32px;font-size:13px;color:var(--t3)}
     <div id="progs"></div>
   </section>
 
+  </div>
+
+  <div class="tabp" data-p="files">
   <section class="card" id="filescard">
     <h2>Check video files</h2>
     <p class="lead">For Tapo, Eufy or any other camera: download clips from its app, or copy them from its memory card, then drop them here. They are checked on this computer only</p>
@@ -240,8 +263,11 @@ footer{margin-top:32px;font-size:13px;color:var(--t3)}
     <div id="fprog"></div>
   </section>
 
+  </div>
+
+  <div class="tabp" data-p="finds">
   <div class="rbar">
-    <h2>Results</h2>
+    <h2>Finds</h2>
     <div class="seg" id="kindseg"></div>
     <select id="camsel" class="hidden" aria-label="Camera"></select>
     <span class="sp"></span>
@@ -250,9 +276,12 @@ footer{margin-top:32px;font-size:13px;color:var(--t3)}
   </div>
   <p class="rnote" id="rnote"></p>
   <div id="snaps"></div>
+  <div class="more hidden" id="morebox"><button class="btn ghost" id="morebtn">Show more</button></div>
   <div id="empty" class="empty hidden"></div>
+  </div>
 
-  <section class="card" style="margin-top:32px">
+  <div class="tabp" data-p="cams">
+  <section class="card">
     <h2>Cameras and live watching</h2>
     <p class="lead">This computer must be on the same Wi-Fi as the cameras</p>
     <div id="camlist"></div>
@@ -286,6 +315,7 @@ footer{margin-top:32px;font-size:13px;color:var(--t3)}
       <button class="btn ghost" id="toggle">Start watching</button>
     </div>
   </section>
+  </div>
 
   <footer>Other cats, dogs, birds and small light-coloured objects can show up too, so look before you share. Frames are also saved in the cat-watch-snapshots folder. Keep this window open while searching or watching.</footer>
 </div>
@@ -335,7 +365,10 @@ async function refresh(){
   const cams=st.cams, searching=cams.filter(c=>c.search&&c.search.status==='running'), watching=cams.filter(c=>c.live);
   const ms=new Date(st.missing_since).getTime()/1000;
   $('sincetop').textContent=short(ms);
-  if(first){ if(!$('sfrom').value) $('sfrom').value=st.missing_since; $('addbox').classList.toggle('hidden',cams.length>0); }
+  if(first){ if(!$('sfrom').value) $('sfrom').value=st.missing_since; $('addbox').classList.toggle('hidden',cams.length>0);
+    let saved=''; try{saved=localStorage.getItem('tab')||''}catch(e){}
+    showTab(!cams.length?'cams':(saved||'finds')); }
+  $('tcams').textContent=cams.length||''; $('tsrch').classList.toggle('hidden',!searching.length);
   // status line
   const parts=[];
   searching.forEach(c=>parts.push(`<b>${esc(c.name)}</b>: searching, checked to <span class="mono">${esc(short(c.search.pos))}</span>${c.search.eta!==undefined?', about '+dur(c.search.eta)+' left':''}`));
@@ -402,21 +435,30 @@ function filtered(){
   return snaps.filter(x=>(kindf==='all'||(kindf==='cats'?x.kind!=='movement':x.kind==='movement'))&&(camf==='all'||x.cam===camf))
     .sort((a,b)=>order==='new'?b.t-a.t:a.t-b.t);
 }
+let showN=48, tab='';
+function showTab(t){
+  tab=t; try{localStorage.setItem('tab',t)}catch(e){}
+  document.querySelectorAll('#tabs button').forEach(b=>{const on=b.dataset.tab===t; b.classList.toggle('on',on); b.setAttribute('aria-selected',on);});
+  document.querySelectorAll('.tabp').forEach(p=>p.classList.toggle('on',p.dataset.p===t));
+  window.scrollTo({top:0});
+}
+document.querySelectorAll('#tabs button').forEach(b=>b.onclick=()=>showTab(b.dataset.tab));
+$('morebtn').onclick=()=>{showN+=48;render();};
 function render(){
   const seg=(el,items,cur,fn)=>{$(el).innerHTML=items.map(([v,l])=>`<button data-v="${v}" class="${cur===v?'on':''}">${l}</button>`).join('');$(el).querySelectorAll('button').forEach(b=>b.onclick=()=>fn(b.dataset.v));};
   const nc=snaps.filter(x=>x.kind!=='movement').length, nm=snaps.length-nc;
-  seg('kindseg',[['cats','Cats '+nc],['movement','Movement '+nm],['all','All']],kindf,v=>{kindf=v;render();});
+  seg('kindseg',[['cats','Cats '+nc],['movement','Movement '+nm],['all','All']],kindf,v=>{kindf=v;showN=48;render();});
   seg('ordseg',[['new','Newest'],['old','Oldest']],order,v=>{order=v;render();});
   const names=[...new Set(snaps.map(x=>x.cam))];
   $('camsel').classList.toggle('hidden',names.length<2);
   $('camsel').innerHTML='<option value="all">All cameras</option>'+names.map(n=>`<option ${camf===n?'selected':''}>${esc(n)}</option>`).join('');
-  $('camsel').onchange=()=>{camf=$('camsel').value;render();};
+  $('camsel').onchange=()=>{camf=$('camsel').value;showN=48;render();};
   $('rnote').textContent=kindf==='movement'?'Small things that moved and stayed in view, like a cat hidden behind a car. Many are shadows or leaves, so check by eye':'';
   shown=filtered();
   $('empty').classList.toggle('hidden',shown.length>0);
   $('empty').textContent=snaps.length?'Nothing in this view':'No frames yet. Anything cat-shaped the search or live watching finds appears here, with the camera and the exact time';
   let html='',day='';
-  shown.forEach((x,i)=>{
+  shown.slice(0,showN).forEach((x,i)=>{
     const d=dayName(x.t);
     if(d!==day){ if(day) html+='</div>'; day=d; html+='<div class="dayh">'+d+'</div><div class="grid">'; }
     const r=x.review, v=r&&V[r.verdict];
@@ -425,6 +467,8 @@ function render(){
   });
   if(day) html+='</div>';
   $('snaps').innerHTML=html;
+  $('morebox').classList.toggle('hidden',shown.length<=showN); $('morebtn').textContent='Show more ('+(shown.length-showN)+' left)';
+  const nc2=snaps.filter(x=>x.kind!=='movement').length; $('tcnt').textContent=nc2||'';
   document.querySelectorAll('.shot').forEach(el=>el.onclick=()=>openLb(+el.dataset.i));
   renderAsk();
 }
