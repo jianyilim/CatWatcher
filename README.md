@@ -24,6 +24,7 @@ Helps find a missing cat using your **own** home cameras, entirely on your **own
 
 ## Camera notes
 
+- **Network discovery:** automatically scans your active Wi-Fi/Ethernet subnet (`en0`/LAN) and ignores VPN/point-to-point tunnel interfaces (`utun` etc.), so cameras are still found when a VPN is connected.
 - **VIGI:** found automatically on your Wi-Fi; the search reads the camera's own recordings.
 - **Hikvision:** cameras and recorders are found on your Wi-Fi; the search lists and downloads recordings with the admin password, checks each one, then deletes it.
 - **Tapo:** create a *Camera Account* in the Tapo app (camera settings, Advanced settings, Camera account) and use it in Cat Watch.

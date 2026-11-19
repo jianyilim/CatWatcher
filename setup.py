@@ -1,19 +1,95 @@
 #!/usr/bin/env python3
 """Cat Watch setup: finds cameras on YOUR OWN network, then asks YOU for the camera password.
 The password is typed on this computer, saved only in a private file on this computer, and never sent anywhere."""
-import argparse, concurrent.futures as cf, getpass, json, os, socket, ssl, subprocess, sys, re, time, urllib.request, urllib.error
+import argparse, concurrent.futures as cf, getpass, ipaddress, json, os, socket, ssl, subprocess, sys, re, time, urllib.request, urllib.error
 
 CONF_DIR = os.environ.get('CATWATCH_HOME', os.path.expanduser('~/.catwatch'))
 CONF = os.path.join(CONF_DIR, 'config.json')
 
-def local_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+_IF_HDR_RE = re.compile(r'^([a-zA-Z0-9_.-]+):\s+flags=\d+<([^>]*)>', re.M)
+_SKIP_IF_RE = re.compile(r'^(lo|utun|tun|tap|wg|ppp|gif|stf|awdl|llw|anpi|bridge|docker|veth|br-|virbr)')
+_INET_RE = re.compile(r'^\s+inet\s+(?:addr:)?(\d+\.\d+\.\d+\.\d+)([^\n]*)', re.M)
+_PTP_MASK_RE = re.compile(r'(?:netmask\s+|Mask:)(?:0xffffffff|255\.255\.255\.255)\b')
+
+def _is_lan_ip(ip):
+    """Return True if ip is a private, routable IPv4 LAN address."""
     try:
-        s.connect(('10.255.255.255', 1)); return s.getsockname()[0]
+        addr = ipaddress.ip_address(ip)
+        return addr.version == 4 and addr.is_private and not (addr.is_loopback or addr.is_link_local or addr.is_unspecified or addr.is_multicast)
+    except ValueError:
+        return False
+
+def _parse_ifconfig(text):
+    """Parse ifconfig output into (lan_ips, skipped_ptp_ips)."""
+    lan_ips, skip_ips = [], set()
+    matches = list(_IF_HDR_RE.finditer(text or ''))
+    for idx, m in enumerate(matches):
+        name, flags_str = m.group(1), m.group(2)
+        flags = set(flags_str.split(','))
+        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(text)
+        body = text[m.end():end]
+        if_skipped = bool(flags & {'LOOPBACK', 'POINTOPOINT'}) or bool(_SKIP_IF_RE.match(name))
+        for im in _INET_RE.finditer(body):
+            ip, rest = im.group(1), im.group(2)
+            has_bcast = 'broadcast' in rest or 'Bcast:' in rest
+            is_ptp_addr = '-->' in rest or 'P-t-P:' in rest or bool(_PTP_MASK_RE.search(rest))
+            if if_skipped or (is_ptp_addr and not has_bcast) or not _is_lan_ip(ip):
+                skip_ips.add(ip)
+            elif ip not in lan_ips:
+                lan_ips.append(ip)
+    return lan_ips, skip_ips
+
+def _parse_ifconfig_ips(text):
+    """Extract private broadcast LAN IPv4 addresses from ifconfig output."""
+    return _parse_ifconfig(text)[0]
+
+def local_ips():
+    """Return private LAN IPv4 addresses, preferring physical broadcast interfaces over VPN tunnels."""
+    ips, skip_ips = [], set()
+    try:
+        r = subprocess.run(['ifconfig'], capture_output=True, text=True, timeout=5)
+        if r.returncode == 0 and r.stdout:
+            ips, skip_ips = _parse_ifconfig(r.stdout)
     except Exception:
-        return '127.0.0.1'
-    finally:
-        s.close()
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if _is_lan_ip(ip) and ip not in skip_ips and ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
+    if not ips:
+        for dst in ('192.168.0.1', '192.168.1.1', '10.255.255.255'):
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            try:
+                s.connect((dst, 1))
+                ip = s.getsockname()[0]
+                if _is_lan_ip(ip) and ip not in skip_ips and ip not in ips:
+                    ips.append(ip)
+            except Exception:
+                pass
+            finally:
+                s.close()
+    return ips
+
+def local_ip():
+    """Return the primary local LAN IPv4 address, or 127.0.0.1 if unavailable."""
+    ips = local_ips()
+    return ips[0] if ips else '127.0.0.1'
+
+def lan_hosts():
+    """Return all /24 host IPs for the active local LAN interfaces, excluding own IPs."""
+    ips = [ip for ip in (local_ips() or [local_ip()]) if ip and ip != '127.0.0.1']
+    own, hosts, seen = set(ips), [], set()
+    for ip in ips:
+        base = '.'.join(ip.split('.')[:3])
+        for i in range(1, 255):
+            h = f'{base}.{i}'
+            if h not in own and h not in seen:
+                seen.add(h)
+                hosts.append(h)
+    return hosts
 
 def port_open(ip, port, t=0.5):
     try:
@@ -32,6 +108,10 @@ def onvif_discovery(wait=3.0):
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     s.settimeout(0.5)
     try:
+        ip = local_ip()
+        if ip != '127.0.0.1':
+            try: s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(ip))
+            except Exception: pass
         s.sendto(msg.encode(), ('239.255.255.250', 3702))
         import time; end = time.time() + wait
         while time.time() < end:
@@ -144,9 +224,10 @@ def main():
         hosts = [h.strip() for h in a.hosts.split(',')]
         print('Checking only:', ', '.join(hosts))
     else:
-        me = local_ip(); base = '.'.join(me.split('.')[:3])
-        print(f'This computer is {me}. Looking for cameras on {base}.0/24 (your own network only)...')
-        hosts = [f'{base}.{i}' for i in range(1, 255) if f'{base}.{i}' != me]
+        ips = local_ips() or [local_ip()]
+        subnets = ', '.join('.'.join(ip.split('.')[:3]) + '.0/24' for ip in ips)
+        print(f'This computer is {", ".join(ips)}. Looking for cameras on {subnets} (your own network only)...')
+        hosts = lan_hosts()
         extra = onvif_discovery()
         if extra: print('Cameras that answered the ONVIF broadcast:', ', '.join(sorted(extra)))
         hosts = sorted(set(hosts) | extra, key=lambda x: tuple(int(p) for p in x.split('.')))
