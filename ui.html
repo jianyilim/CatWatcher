@@ -282,6 +282,7 @@ footer{margin-top:32px;font-size:13px;color:var(--t3)}
       <div><div class="k">Camera</div><div class="v" id="lbcam"></div></div>
       <div><div class="k">What the detector saw</div><div class="v" id="lbkind"></div></div>
       <div class="cl" id="lbclaude"></div>
+      <div id="lbclip"></div>
       <div><div class="k">Close-up</div><img id="lbcrop" alt="Close-up"></div>
       <div class="row"><button id="lbprev">Earlier</button><button id="lbnext">Later</button></div>
       <div><a id="lbsave" download>Save frame</a> · <a id="lbsavec" download>Save close-up</a></div>
@@ -429,12 +430,28 @@ function openLb(i,keep){
   else $('lbclaude').innerHTML=`<b>Claude: ${esc(V[r.verdict]?V[r.verdict][1]:r.verdict)}${r.what?' · '+esc(r.what):''}</b><div style="color:#a3a3ab">${esc(r.reason)}</div>`;
   if($('lbask')) $('lbask').onclick=async()=>{await api('/api/ask',{files:[x.file]});refreshSnaps();};
   $('lbsave').href=x.full; $('lbsavec').href=x.crop;
+  if(!keep) showClip(x);
   const earlier=order==='new'?i+1:i-1, later=order==='new'?i-1:i+1;
   $('lbprev').disabled=earlier<0||earlier>=shown.length; $('lbnext').disabled=later<0||later>=shown.length;
   $('lbprev').onclick=()=>openLb(earlier); $('lbnext').onclick=()=>openLb(later);
   $('lb').style.display='block';
 }
-function closeLb(){$('lb').style.display='none';lbi=-1;render();}
+let clipTimer=null;
+async function showClip(x){
+  clearTimeout(clipTimer);
+  const box=$('lbclip'), mine=()=>lbi>=0&&shown[lbi]&&shown[lbi].file===x.file;
+  let s; try{s=await api('/api/clip?file='+encodeURIComponent(x.file))}catch(e){s={status:'error',msg:'Could not reach Cat Watch'}}
+  if(!mine())return;
+  if(s.status==='done'){
+    if(!box.querySelector('video')) box.innerHTML=`<div class="k">Video, 1 minute before to 1 minute after</div><video controls playsinline preload="metadata" src="${s.url}" style="width:100%;border-radius:8px;margin-top:6px;background:#000"></video><div style="margin-top:6px"><a href="${s.url}" download="${esc(x.file.replace('.jpg','.mp4'))}">Save video</a></div>`;
+    return;
+  }
+  if(s.status==='running'){box.innerHTML=`<div class="doing"><span class="spin"></span><span>${esc(s.msg||'Getting the video')}</span></div>`; clipTimer=setTimeout(()=>showClip(x),2000); return;}
+  box.innerHTML=(s.status==='error'?`<div style="color:var(--neg);font-size:13px;margin-bottom:8px">${esc(s.msg)}</div>`:'')+
+    `<div class="row"><button id="lbvid">Video ±1 min</button></div><div class="k" style="margin-top:6px">${x.mode==='file'?'Cut from the video file':'From the camera, takes about 2 minutes'}</div>`;
+  $('lbvid').onclick=async()=>{box.innerHTML='<div class="doing"><span class="spin"></span><span>Starting</span></div>'; await api('/api/clip',{file:x.file}); showClip(x);};
+}
+function closeLb(){clearTimeout(clipTimer);$('lb').style.display='none';lbi=-1;render();}
 $('lbclose').onclick=closeLb;
 $('lb').onclick=e=>{if(e.target.classList.contains('ib'))closeLb();};
 document.addEventListener('keydown',e=>{if(lbi<0)return;if(e.key==='Escape')closeLb();if(e.key==='ArrowLeft')$('lbprev').click();if(e.key==='ArrowRight')$('lbnext').click();});

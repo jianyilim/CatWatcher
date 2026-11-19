@@ -280,6 +280,50 @@ def snapshots(limit=5000):
         x['review'] = rv.get(x['file']) or ({'verdict': 'checking'} if x['file'] in pending else None)
     return items[:limit]
 
+# ---------- a video of the minute before and after a photo ----------
+CLIPS = os.path.join(OUT, '_clips'); clip_jobs = {}
+def camkey(x): return re.sub(r'[^A-Za-z0-9_-]+', '-', x.get('name', 'camera')).strip('-') or x['id']
+def clip_target(file):
+    m = SNAP_RE.match(os.path.basename(file or '').replace('.jpg', '_crop.jpg'))
+    if not m: return None, 'Unknown photo'
+    t = time.mktime(time.strptime(m.group('ts'), '%Y-%m-%d_%H%M%S'))
+    out = os.path.join(CLIPS, os.path.basename(file).replace('.jpg', '.mp4'))
+    if m.group('mode') == 'FILE': return {'t': t, 'out': out, 'cid': None}, ''
+    x = next((x for x in load()['cams'] if camkey(x) == m.group('cam')), None)
+    if not x: return None, 'The camera for this photo is no longer set up'
+    return {'t': t, 'out': out, 'cid': x['id']}, ''
+def clip_info(file):
+    tg, err = clip_target(file)
+    if not tg: return {'status': 'error', 'msg': err}
+    if os.path.exists(tg['out']): return {'status': 'done', 'url': f"/clip/{os.path.basename(tg['out'])}?t={TOKEN}"}
+    try: s = json.load(open(tg['out'] + '.json'))
+    except Exception: return {'status': 'none'}
+    if s.get('status') == 'running' and not alive(clip_jobs.get(file)): s = {'status': 'error', 'msg': 'Getting the video stopped unexpectedly'}
+    return s
+def clip_start(file):
+    tg, err = clip_target(file)
+    if not tg: return {'ok': False, 'msg': err}
+    cur = clip_info(file)
+    if cur.get('status') in ('done', 'running'): return {'ok': True, **cur}
+    os.makedirs(CLIPS, exist_ok=True); S.write_json(tg['out'] + '.json', {'status': 'running', 'msg': 'Starting'})
+    cmd = [sys.executable, os.path.join(HERE, 'agent.py'), '--out', OUT, '--clip-at', str(tg['t']), '--clip-out', tg['out']]
+    cid = tg['cid']
+    if cid:
+        cmd += ['--cam', cid]
+        if alive(search.get(cid)): stop_search(cid, note=False)   # the camera plays back one recording at a time
+        paused.add(cid)
+    else:
+        ups = [os.path.join(UPLOADS, f) for f in os.listdir(UPLOADS)] if os.path.isdir(UPLOADS) else []
+        if not ups: return {'ok': False, 'msg': 'The video file for this photo is no longer there'}
+        cmd += ['--files'] + ups
+    p = subprocess.Popen(cmd, cwd=HERE, env=dict(os.environ, CATWATCH_HOME=HOME), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    clip_jobs[file] = p
+    def after():
+        p.wait()
+        if cid: paused.discard(cid)                        # its searches carry on from where they were
+    threading.Thread(target=after, daemon=True).start()
+    return {'ok': True, 'status': 'running', 'msg': 'Starting'}
+
 # ---------- setup ----------
 def scan(hosts_arg):
     if hosts_arg:
@@ -395,6 +439,27 @@ class H(BaseHTTPRequestHandler):
     def _auth(self):
         q = parse_qs(urlparse(self.path).query)
         return self._host_ok() and (self.headers.get('X-Token') == TOKEN or q.get('t', [''])[0] == TOKEN)
+    def _video(self, name):
+        if '/' in name or '..' in name or not name.endswith('.mp4'): return self._json({'error': 'bad path'}, 400)
+        p = os.path.join(CLIPS, name)
+        if not os.path.isfile(p): return self._json({'error': 'not found'}, 404)
+        size = os.path.getsize(p); a, b = 0, size - 1
+        m = re.match(r'bytes=(\d*)-(\d*)', self.headers.get('Range', ''))
+        if m:
+            if m.group(1): a = int(m.group(1)); b = int(m.group(2)) if m.group(2) else size - 1
+            else: a = max(0, size - int(m.group(2)))
+            b = min(b, size - 1)
+        self.send_response(206 if m else 200); self.send_header('Content-Type', 'video/mp4'); self.send_header('Accept-Ranges', 'bytes')
+        if m: self.send_header('Content-Range', f'bytes {a}-{b}/{size}')
+        self.send_header('Content-Length', str(b - a + 1)); self.end_headers()
+        with open(p, 'rb') as f:
+            f.seek(a); left = b - a + 1
+            while left > 0:
+                chunk = f.read(min(1 << 20, left))
+                if not chunk: break
+                try: self.wfile.write(chunk)
+                except Exception: break
+                left -= len(chunk)
     def do_GET(self):
         u = urlparse(self.path)
         if not self._host_ok(): return self._json({'error': 'bad host'}, 403)
@@ -405,6 +470,8 @@ class H(BaseHTTPRequestHandler):
         if not self._auth(): return self._json({'error': 'forbidden'}, 403)
         if u.path == '/api/status': return self._json(status())
         if u.path == '/api/snapshots': return self._json(snapshots())
+        if u.path == '/api/clip': return self._json(clip_info(parse_qs(u.query).get('file', [''])[0]))
+        if u.path.startswith('/clip/'): return self._video(unquote(u.path[6:]))
         if u.path.startswith('/snap/'):
             parts = unquote(u.path[6:]).split('/')
             if len(parts) != 2 or '..' in parts[0] + parts[1]: return self._json({'error': 'bad path'}, 400)
@@ -439,6 +506,7 @@ class H(BaseHTTPRequestHandler):
             if nm and os.path.isfile(os.path.join(UPLOADS, nm)): os.remove(os.path.join(UPLOADS, nm))
             return self._json({'ok': True})
         if p == '/api/connect': return self._json(connect(d))
+        if p == '/api/clip': return self._json(clip_start(d.get('file', '')))
         if p == '/api/hik_channels': return self._json(hik_channels(d))
         if p == '/api/auto':
             with CFG_LOCK:

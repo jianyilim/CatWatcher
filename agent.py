@@ -570,6 +570,67 @@ def history(a, det, cfg):
     log(a.out, 'search finished, possible cats:', det.found)
     notify('Cat Watch', f'Search finished: {plural(det.found, "possible cat photo")}')
 
+# ---------- a short video around a photo ----------
+def make_clip(a, cfg):
+    """Saves the video from clip_span seconds before to clip_span seconds after clip_at, as an MP4 that plays in any browser."""
+    out = a.clip_out; st = out + '.json'; span = a.clip_span; t0 = a.clip_at - span; dur = 2 * span
+    def P(**k):
+        try: s = json.load(open(st))
+        except Exception: s = {}
+        s.update(k); write_json(st, s)
+    P(status='running', msg='Getting the video from the camera', started=time.time())
+    raw = out + '.raw'; parts = []
+    try:
+        b = cfg.get('brand') or ''
+        if a.files:                                            # cut from a video file someone added
+            src = None
+            for f in a.files:
+                s, _ = file_start_time(f)
+                d = float(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', f], capture_output=True, text=True).stdout.strip() or 0)
+                if s - 5 <= a.clip_at <= s + d + 5: src = (f, s); break
+            if not src: raise RuntimeError('the video file for this photo is no longer there')
+            ss = max(0.0, t0 - src[1]); inp = ['-ss', f'{ss:.2f}', '-i', src[0]]
+        elif 'Hikvision' in b:
+            items = [it for it in hik_recordings(cfg, t0, t0 + dur) if it[1] > t0 and it[0] < t0 + dur]
+            if not items: raise RuntimeError('the camera has no recording at this time')
+            for n, (s, e, ref) in enumerate(items):
+                p = hik_download(cfg, ref, f'{raw}.{n}.mp4')
+                if p: parts.append(p)
+            if not parts: raise RuntimeError('could not download the recording')
+            lst = raw + '.txt'; open(lst, 'w').write(''.join(f"file '{p}'\n" for p in parts)); parts.append(lst)
+            inp = ['-ss', f'{max(0.0, t0 - items[0][0]):.2f}', '-f', 'concat', '-safe', '0', '-i', lst]
+        elif 'Tapo' in b:
+            raise RuntimeError('videos from Tapo cameras are not supported yet; use the Tapo app')
+        else:                                                  # TP-Link VIGI: play the recording back at normal speed
+            P(msg='Getting the video from the camera (about 2 minutes)')
+            pos, fails = t0, 0                                 # the camera stops after about 40 seconds, so fetch in pieces
+            while pos < t0 + dur - 2 and fails < 4:
+                piece = f'{raw}.{len(parts)}.ts'
+                with open(piece, 'wb') as fh:
+                    try: r = vigi_stream(cfg['ip'], cfg.get('user', 'admin'), cfg['pw'], pos, 70, fh.write, '1/1')
+                    except Exception: r = (0, '')
+                got = float(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', piece],
+                                           capture_output=True, text=True).stdout.strip() or 0) if os.path.getsize(piece) > 200000 else 0
+                if got < 2:
+                    os.remove(piece); fails += 1; P(msg='The camera is busy, trying again'); time.sleep(10); continue
+                parts.append(piece); pos += got - 0.5; fails = 0
+                P(msg=f'Getting the video from the camera ({min(100, int(100 * (pos - t0) / dur))}%)')
+            if not parts: raise RuntimeError('the camera did not send this recording (busy, or nothing recorded)')
+            lst = raw + '.txt'; open(lst, 'w').write(''.join(f"file '{p}'\n" for p in parts)); parts.append(lst)
+            inp = ['-f', 'concat', '-safe', '0', '-i', lst]
+        P(msg='Preparing the video')
+        tmp = out + '.tmp.mp4'
+        r = subprocess.run(['ffmpeg', '-v', 'error', '-y'] + inp + ['-t', str(dur), '-vf', 'scale=1280:-2', '-c:v', 'libx264', '-preset', 'veryfast',
+                            '-crf', '23', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', '-an', tmp], capture_output=True, text=True, timeout=600)
+        if r.returncode != 0 or not os.path.exists(tmp) or os.path.getsize(tmp) < 10000: raise RuntimeError('could not prepare the video')
+        os.replace(tmp, out); P(status='done', msg='Ready', finished=time.time())
+    except Exception as ex:
+        P(status='error', msg='Could not get the video: ' + str(ex)[:150])
+    finally:
+        for p in parts:
+            try: os.remove(p)
+            except Exception: pass
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--source', default=os.environ.get('CATWATCH_SOURCE', ''), help='rtsp://user:pass@ip:554/stream1 OR a video file (live mode)')
@@ -584,6 +645,8 @@ def main():
     ap.add_argument('--to', type=float, help='end of the search (epoch seconds, default now)')
     ap.add_argument('--cam', help='camera id from the setup (default: the first camera)')
     ap.add_argument('--files', nargs='+', help='check these downloaded video files (any camera brand)')
+    ap.add_argument('--clip-at', type=float, help=argparse.SUPPRESS); ap.add_argument('--clip-out', help=argparse.SUPPRESS)
+    ap.add_argument('--clip-span', type=float, default=60, help=argparse.SUPPRESS)
     ap.add_argument('--starts', nargs='+', help='recording start time of each file (epoch seconds, or auto)')
     ap.add_argument('--test-chunk', help=argparse.SUPPRESS); ap.add_argument('--test-start', type=float, help=argparse.SUPPRESS)
     a = ap.parse_args()
@@ -594,6 +657,8 @@ def main():
     data = json.load(open(cfgp)) if os.path.exists(cfgp) else {}
     if a.files:
         cfg = {}                                  # video files do not belong to a camera
+    elif a.clip_at and 'cams' in data:
+        cfg = next((c for c in data['cams'] if c.get('id') == a.cam), {})
     elif 'cams' in data:
         cams = data['cams']; cfg = next((c for c in cams if c.get('id') == a.cam), cams[0] if cams else {})
         a.cam = cfg.get('id', a.cam)
@@ -601,6 +666,7 @@ def main():
         cfg = data
     if not a.source: a.source = cfg.get('source', '')
     if a.name == 'camera': a.name = cfg.get('name', 'camera')
+    if a.clip_at: make_clip(a, cfg); return
     from ultralytics import YOLO
     mname = pick_model(a.model); dev = device_name(); model = YOLO(mname)
     if a.files:
