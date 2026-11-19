@@ -71,6 +71,14 @@ def identify(ip):
                 brand = 'TP-Link VIGI' if web_page else 'TP-Link Tapo'
         except Exception:
             pass
+    if not brand and port_open(ip, 80):
+        try:                                     # Hikvision answers its ISAPI address with a login challenge
+            urllib.request.urlopen(f'http://{ip}/ISAPI/System/deviceInfo', timeout=5)
+        except urllib.error.HTTPError as he:
+            srv = (he.headers.get('Server') or '') + ' ' + (he.headers.get('WWW-Authenticate') or '')
+            if he.code == 401 and re.search(r'App-webs|DNVRS-Webs|DVRDVS-Webs|Hikvision|IP Camera|NVR', srv, re.I): brand = 'Hikvision'
+        except Exception:
+            pass
     if brand or rtsp:
         return (brand or 'camera (brand unknown)', {'rtsp_port_open': rtsp, 'https': https, 'stream_port_8443': alt})
     return None
@@ -87,10 +95,12 @@ def write_json(path, obj):
     with open(tmp, 'w') as f: json.dump(obj, f)
     os.replace(tmp, path)
 
-def try_rtsp(ip, user, pw):
+def try_rtsp(ip, user, pw, brand=''):
     """One login attempt per call: a wrong password stops at the first address, so the camera counts one failure."""
     from urllib.parse import quote
-    for path in ('stream1', 'stream2'):
+    paths = ('Streaming/Channels/101', 'Streaming/Channels/102') if 'Hikvision' in (brand or '') else \
+            ('stream1', 'stream2') if 'TP-Link' in (brand or '') else ('stream1', 'Streaming/Channels/101', 'stream2')
+    for path in paths:
         url = f'rtsp://{quote(user, safe="")}:{quote(pw, safe="")}@{ip}:554/{path}'
         try:
             r = subprocess.run(['ffprobe', '-v', 'error', '-rtsp_transport', 'tcp', '-show_entries', 'stream=codec_name',

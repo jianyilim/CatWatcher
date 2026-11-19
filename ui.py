@@ -232,7 +232,7 @@ def connect(d):
     if not pw: return {'ok': False, 'msg': 'Please type the camera password.'}
     t, ok = tries_ok(ip)
     if not ok: return {'ok': False, 'msg': 'Stopped after 3 wrong tries so the camera does not lock you out. Wait 30 minutes and check the password.'}
-    try: url = S.try_rtsp(ip, user, pw)
+    try: url = S.try_rtsp(ip, user, pw, d.get('brand', ''))
     except Exception as ex: return {'ok': False, 'msg': 'Could not test the camera: ' + repr(ex)[:80]}
     if not url:
         t[ip].append(time.time()); json.dump(t, open(TRIES, 'w'))
@@ -271,7 +271,7 @@ def do_search(d):
     ready = []
     for x in chosen:
         b = x.get('brand') or ''
-        if 'VIGI' in b: ready.append(x)
+        if 'VIGI' in b or 'Hikvision' in b: ready.append(x)
         elif 'Tapo' in b:
             if x.get('cloud_pw'): ready.append(x)
             else: notes.append(f'{x["name"]}: add the Tapo account password (Cameras section) to search its recordings')

@@ -3,3 +3,4 @@ numpy
 pillow
 websockets
 pytapo==3.3.19
+requests

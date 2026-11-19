@@ -234,7 +234,7 @@ footer{margin-top:32px;font-size:13px;color:var(--t3)}
           <div><label class="l" for="user">Username</label><input type="text" id="user" value="admin"></div>
         </div>
         <div class="two">
-          <div><label class="l" for="ctype">Camera type</label><select id="ctype"><option value="TP-Link VIGI">TP-Link VIGI</option><option value="TP-Link Tapo">TP-Link Tapo</option><option value="Other">Other brand</option></select></div>
+          <div><label class="l" for="ctype">Camera type</label><select id="ctype"><option value="TP-Link VIGI">TP-Link VIGI</option><option value="TP-Link Tapo">TP-Link Tapo</option><option value="Hikvision">Hikvision</option><option value="Other">Other brand</option></select></div>
           <div><label class="l" for="pw">Camera password</label><input type="password" id="pw" autocomplete="off"></div>
         </div>
         <p id="tapohelp" class="hidden" style="margin:8px 0 0;font-size:13px;color:var(--t2)">For Tapo, use the Camera Account from the Tapo app (camera settings, Advanced settings, Camera account) as the username and password</p>
@@ -419,7 +419,7 @@ $('scan').onclick=async()=>{
   $('scan').disabled=false;
   if(!r.cams.length){$('found').innerHTML='<div class="msg err">No cameras found. Check this computer is on the same Wi-Fi as the cameras</div>';return;}
   $('found').innerHTML=r.cams.map((c,i)=>`<label class="pick"><input type="radio" name="cam" value="${c.ip}" data-brand="${esc(c.brand)}" ${i===0?'checked':''}><div><b>${esc(c.brand)}</b><span>${c.ip}${c.added?' · already added':''}</span></div></label>`).join('')+'<div style="margin-top:12px"><button class="btn ghost" id="use">Use this camera</button></div>';
-  $('use').onclick=()=>{const el=document.querySelector('input[name=cam]:checked');picked=el.value;pickedBrand=el.dataset.brand;$('ctype').value=/Tapo/.test(pickedBrand)?'TP-Link Tapo':/VIGI/.test(pickedBrand)?'TP-Link VIGI':'Other';tapoUi();$('connectbox').classList.remove('hidden');$('name').focus();$('cmsg').innerHTML='';};
+  $('use').onclick=()=>{const el=document.querySelector('input[name=cam]:checked');picked=el.value;pickedBrand=el.dataset.brand;$('ctype').value=/Tapo/.test(pickedBrand)?'TP-Link Tapo':/VIGI/.test(pickedBrand)?'TP-Link VIGI':/Hikvision/.test(pickedBrand)?'Hikvision':'Other';tapoUi();$('connectbox').classList.remove('hidden');$('name').focus();$('cmsg').innerHTML='';};
 };
 $('connect').onclick=async()=>{
   if(!$('name').value.trim()){$('cmsg').innerHTML='<div class="msg err">Give the camera a name, like Front door</div>';return;}
