@@ -48,6 +48,14 @@ header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:24px 0 20
 .card h2{margin:0 0 4px;font-size:18px;font-weight:600}
 .lead{margin:0 0 20px;color:var(--t2);font-size:14px}
 .byip{margin-top:16px}
+.chlist{margin-top:14px;border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.chrow{display:flex;align-items:center;gap:12px;padding:10px 14px;border-top:1px solid var(--line);cursor:pointer;margin:0;font-size:14px}
+.chrow:first-child{border-top:0}
+.chrow input{accent-color:var(--t1);margin:0;width:16px;height:16px;flex:none}
+.chrow b{font-weight:500}
+.chrow .meta{margin-left:auto;color:var(--t3);font-size:13px;font-family:var(--mono)}
+.chrow .off{color:var(--neg)}
+.chhead{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-top:14px;font-size:14px;color:var(--t2)}
 .byiprow{display:flex;gap:8px;max-width:440px}
 .byiprow input{flex:1;min-width:0}
 .keep{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;margin:0 0 20px;border:1px solid var(--line);border-radius:12px;background:var(--raised)}
@@ -249,7 +257,8 @@ footer{margin-top:32px;font-size:13px;color:var(--t3)}
           <div><label class="l" for="ctype">Camera type</label><select id="ctype"><option value="TP-Link VIGI">TP-Link VIGI</option><option value="TP-Link Tapo">TP-Link Tapo</option><option value="Hikvision">Hikvision</option><option value="Other">Other brand</option></select></div>
           <div><label class="l" for="pw">Camera password</label><input type="password" id="pw" autocomplete="off"></div>
         </div>
-        <div id="chbox" class="hidden" style="margin-top:12px;max-width:240px"><label class="l" for="chan">Channel (recorders only, else 1)</label><input type="number" id="chan" min="1" max="64" value="1"></div>
+        <div id="chbox" class="hidden"><input type="hidden" id="chan" value="1"></div>
+        <div id="chpick" class="hidden"></div>
         <p id="tapohelp" class="hidden" style="margin:8px 0 0;font-size:13px;color:var(--t2)">For Tapo, use the Camera Account from the Tapo app (camera settings, Advanced settings, Camera account) as the username and password</p>
         <div id="tapobox" class="hidden" style="margin-top:12px"><label class="l" for="cloudpw">Tapo account password (only to search past recordings)</label><input type="password" id="cloudpw" autocomplete="off"></div>
         <div style="margin-top:12px"><button class="btn" id="connect">Add camera</button></div>
@@ -451,8 +460,49 @@ $('ipgo').onclick=async()=>{
   $('ctype').value=/Tapo/.test(pickedBrand)?'TP-Link Tapo':/VIGI/.test(pickedBrand)?'TP-Link VIGI':/Hikvision/.test(pickedBrand)?'Hikvision':(c?'Other':'Hikvision');
   tapoUi();$('connectbox').classList.remove('hidden');$('name').focus();$('cmsg').innerHTML='';
 };
+async function addOne(ch,name){
+  return await api('/api/connect',{ip:picked,channel:ch,brand:$('ctype').value,cloud_pw:'',name,user:$('user').value,password:$('pw').value});
+}
+let hikDev=null;
+function renderPick(){
+  const d=hikDev, chs=d.channels;
+  $('chpick').innerHTML=`<div class="chhead"><span>${esc(d.model||'Hikvision')} has ${plural(chs.length,'camera')}. Tick the ones to search</span><button class="link" id="chall">Tick all</button></div>
+    <div class="chlist">${chs.map(c=>`<label class="chrow"><input type="checkbox" data-ch="${c.ch}" ${c.added?'disabled':(c.online!==false?'checked':'')}><b>${esc(c.name)}</b><span class="meta">${c.added?'already added':c.online===false?'<span class="off">offline</span>':''} ch ${c.ch}${c.ip?' · '+esc(c.ip):''}</span></label>`).join('')}</div>`;
+  $('chpick').classList.remove('hidden');
+  $('chall').onclick=()=>document.querySelectorAll('#chpick input:not(:disabled)').forEach(i=>i.checked=true);
+  $('connect').textContent='Add ticked cameras';
+}
+function resetPick(){hikDev=null;$('chpick').classList.add('hidden');$('chpick').innerHTML='';$('connect').textContent='Add camera';}
 $('connect').onclick=async()=>{
-  if(!$('name').value.trim()){$('cmsg').innerHTML='<div class="msg err">Give the camera a name, like Front door</div>';return;}
+  if($('ctype').value==='Hikvision'){
+    if(!$('pw').value){$('cmsg').innerHTML='<div class="msg err">Type the admin password</div>';return;}
+    $('connect').disabled=true;
+    if(!hikDev){
+      $('cmsg').innerHTML='<div class="doing"><span class="spin"></span><span>Asking it which cameras it has</span></div>';
+      let r; try{r=await api('/api/hik_channels',{ip:picked,user:$('user').value,password:$('pw').value})}catch(e){r={ok:false,msg:'Could not reach Cat Watch. Is its window still open?'}}
+      $('connect').disabled=false;
+      if(!r.ok){$('cmsg').innerHTML='<div class="msg err">'+esc(r.msg)+'</div>';return;}
+      hikDev=r; $('cmsg').innerHTML='';
+      if(r.channels.length>1){renderPick();return;}
+      $('connect').disabled=true;
+    }
+    const ticked=hikDev.channels.length>1?[...document.querySelectorAll('#chpick input:checked:not(:disabled)')].map(i=>hikDev.channels.find(c=>c.ch==i.dataset.ch)):hikDev.channels;
+    if(!ticked.length){$('connect').disabled=false;$('cmsg').innerHTML='<div class="msg err">Tick at least one camera</div>';return;}
+    const base=$('name').value.trim(), out=[];
+    for(const [k,c] of ticked.entries()){
+      $('cmsg').innerHTML=`<div class="doing"><span class="spin"></span><span>Adding ${esc(c.name)} (${k+1} of ${ticked.length})</span></div>`;
+      const nm=(ticked.length===1&&base)?base:(base?base+' · ':'')+c.name;
+      let r; try{r=await addOne(c.ch,nm.slice(0,30))}catch(e){r={ok:false,msg:'Could not reach Cat Watch'}}
+      out.push((r.ok?'Added ':'Not added: ')+esc(c.name)+(r.ok?'':' ('+esc(r.msg)+')'));
+      if(!r.ok&&/tries|password/i.test(r.msg))break;
+    }
+    $('connect').disabled=false;$('pw').value='';
+    const allok=out.every(x=>x.startsWith('Added'));
+    $('cmsg').innerHTML='<div class="msg '+(allok?'ok':'err')+'">'+out.join('<br>')+(allok?'<br>They start searching by themselves in a moment':'')+'</div>';
+    if(allok){resetPick();$('name').value='';$('found').innerHTML='';$('connectbox').classList.add('hidden');}
+    refresh();return;
+  }
+  if(!$('name').value.trim()){$('cmsg').innerHTML='<div class="msg err">Give the camera a name, like Front door</div>';return;}  // (Hikvision handled above: channel names are used)
   $('connect').disabled=true;$('cmsg').innerHTML='<div class="doing"><span class="spin"></span><span>Testing the video connection</span></div>';
   let r; try{ r=await api('/api/connect',{ip:picked,channel:$('chan').value,brand:$('ctype').value,cloud_pw:$('cloudpw').value,name:$('name').value,user:$('user').value,password:$('pw').value}); }catch(e){ r={ok:false,msg:'Could not reach Cat Watch. Is its window still open?'}; }
   $('pw').value='';$('cloudpw').value='';$('connect').disabled=false;
@@ -469,7 +519,7 @@ $('sbtn').onclick=async()=>{
   refresh(); refreshSnaps();
 };
 $('keep').onchange=async()=>{await api('/api/auto',{on:$('keep').checked});refresh();};
-function tapoUi(){$('chbox').classList.toggle('hidden',$('ctype').value!=='Hikvision');const t=$('ctype').value==='TP-Link Tapo';$('tapobox').classList.toggle('hidden',!t);$('tapohelp').classList.toggle('hidden',!t);}
+function tapoUi(){resetPick();$('chbox').classList.toggle('hidden',$('ctype').value!=='Hikvision');const t=$('ctype').value==='TP-Link Tapo';$('tapobox').classList.toggle('hidden',!t);$('tapohelp').classList.toggle('hidden',!t);}
 $('ctype').onchange=tapoUi;
 let upl={};  // name -> {pct, done, err}
 function fmtSize(b){return b>1e9?(b/1e9).toFixed(1)+' GB':b>1e6?(b/1e6).toFixed(0)+' MB':(b/1e3).toFixed(0)+' KB'}

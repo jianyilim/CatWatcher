@@ -287,6 +287,23 @@ def tries_ok(ip):
     now = time.time(); t[ip] = [x for x in t.get(ip, []) if now - x < 1800]
     return t, len(t[ip]) < 3
 
+def hik_channels(d):
+    """Lists the cameras on a Hikvision recorder (or the one camera) so the user can pick which to add."""
+    ip = d.get('ip', ''); user = d.get('user', '') or 'admin'; pw = d.get('password', '')
+    if not private(ip): return {'ok': False, 'msg': 'That address is not on your home network.'}
+    if not pw: return {'ok': False, 'msg': 'Please type the password.'}
+    t, ok = tries_ok(ip)
+    if not ok: return {'ok': False, 'msg': 'Stopped after 3 wrong tries so the device does not lock you out. Wait 30 minutes and check the password.'}
+    try: dev = S.hik_device(f'http://{ip}', user, pw)
+    except PermissionError:
+        t[ip].append(time.time()); json.dump(t, open(TRIES, 'w'))
+        return {'ok': False, 'msg': f'The password was not accepted. {3 - len(t[ip])} tries left.'}
+    except Exception as ex:
+        return {'ok': False, 'msg': 'Could not ask the device for its cameras: ' + repr(ex)[:80]}
+    have = {(x['ip'], int(x.get('channel') or 1)) for x in load()['cams']}
+    for ch in dev['channels']: ch['added'] = (ip, ch['ch']) in have
+    return {'ok': True, **dev}
+
 def connect(d):
     ip = d.get('ip', ''); user = d.get('user', '') or 'admin'; pw = d.get('password', ''); name = (d.get('name') or 'camera').strip()[:30]
     if not private(ip): return {'ok': False, 'msg': 'That address is not on your home network.'}
@@ -413,6 +430,7 @@ class H(BaseHTTPRequestHandler):
             if nm and os.path.isfile(os.path.join(UPLOADS, nm)): os.remove(os.path.join(UPLOADS, nm))
             return self._json({'ok': True})
         if p == '/api/connect': return self._json(connect(d))
+        if p == '/api/hik_channels': return self._json(hik_channels(d))
         if p == '/api/auto':
             with CFG_LOCK:
                 cc = load(); cc['auto'] = bool(d.get('on')); save(cc)

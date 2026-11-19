@@ -111,6 +111,34 @@ def write_json(path, obj):
             if i == 19: raise
             time.sleep(0.05)
 
+def hik_device(base, user, pw):
+    """Asks a Hikvision camera or recorder what it is and which cameras (channels) it has.
+    Returns {'type', 'model', 'name', 'channels': [{'ch', 'name', 'ip', 'online'}]}. Raises PermissionError on a wrong password."""
+    import requests
+    from requests.auth import HTTPDigestAuth
+    auth = HTTPDigestAuth(user, pw)
+    def get(path):
+        r = requests.get(base.rstrip('/') + path, auth=auth, timeout=10)
+        if r.status_code == 401: raise PermissionError('wrong username or password')
+        return r.text if r.ok else ''
+    tag = lambda x, t: (re.search(rf'<{t}>([^<]*)</{t}>', x) or [None, ''])[1].strip()
+    info = get('/ISAPI/System/deviceInfo')
+    dev = {'type': tag(info, 'deviceType') or 'camera', 'model': tag(info, 'model'), 'name': tag(info, 'deviceName'), 'channels': []}
+    online = {}
+    for st in re.findall(r'<InputProxyChannelStatus\b.*?</InputProxyChannelStatus>', get('/ISAPI/ContentMgmt/InputProxy/channels/status'), re.S):
+        online[tag(st, 'id')] = tag(st, 'online').lower() == 'true'
+    for c in re.findall(r'<InputProxyChannel\b.*?</InputProxyChannel>', get('/ISAPI/ContentMgmt/InputProxy/channels'), re.S):
+        cid = tag(c, 'id')                                   # cameras plugged into a recorder
+        if cid.isdigit(): dev['channels'].append({'ch': int(cid), 'name': tag(c, 'name') or f'Camera {cid}', 'ip': tag(c, 'ipAddress'), 'online': online.get(cid)})
+    if not dev['channels']:
+        for c in re.findall(r'<VideoInputChannel\b.*?</VideoInputChannel>', get('/ISAPI/System/Video/inputs/channels'), re.S):
+            cid = tag(c, 'id')                               # a camera itself, or a recorder's own wired inputs
+            if cid.isdigit() and tag(c, 'videoInputEnabled').lower() != 'false':
+                dev['channels'].append({'ch': int(cid), 'name': tag(c, 'name') or f'Camera {cid}', 'ip': '', 'online': None})
+    if not dev['channels']: dev['channels'] = [{'ch': 1, 'name': dev['name'] or 'Camera 1', 'ip': '', 'online': None}]
+    dev['channels'].sort(key=lambda c: c['ch'])
+    return dev
+
 def try_rtsp(ip, user, pw, brand='', channel=1):
     return probe_rtsp(ip, user, pw, brand, channel)[0]
 
