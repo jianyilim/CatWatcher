@@ -518,11 +518,18 @@ def history(a, det, cfg):
         if not hit_end and (nb < 300000 or k < 10):
             fails += 1; log(a.out, 'no video for', datetime.datetime.fromtimestamp(base).strftime('%d/%m %H:%M'), 'error', err)
             if 'busy' in str(err).lower() or '52405' in str(err): busy_seen = True
+            midnight = datetime.datetime.combine(datetime.date.fromtimestamp(base) + datetime.timedelta(days=1), datetime.time()).timestamp()
+            if 0 < midnight - base <= 60 and not busy_seen:      # end of the day's recordings: go straight on to the next day
+                act(f'Reached the end of {datetime.datetime.fromtimestamp(base).strftime("%a %d %b")} recordings, carrying on from midnight')
+                pos = midnight; fails = 0; continue
             act(f'No video received for {fmt(base)} (camera busy or nothing recorded), trying again')
             if fails >= 4:
                 act(f'Skipped 5 minutes at {fmt(base)}: the camera gave no recording')
                 if busy_seen and not gap[0]: gap[0] = base; P(gap=base)    # checked again next time
-                pos += 300; fails = 0; busy_seen = False
+                midnight = datetime.datetime.combine(datetime.date.fromtimestamp(base) + datetime.timedelta(days=1), datetime.time()).timestamp()
+                # the camera keeps each day separately: just before midnight, carry on at midnight, not 5 minutes later
+                pos = midnight if 0 < midnight - base <= 300 else pos + 300
+                fails = 0; busy_seen = False
             if a.test_chunk: break
             time.sleep(15); continue
         fails = 0; end = min(base + real, a.to); new = det.found - before
