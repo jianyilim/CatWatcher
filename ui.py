@@ -66,14 +66,22 @@ def parse_local(v): return time.mktime(time.strptime(v, '%Y-%m-%dT%H:%M'))
 def fmt(t): return time.strftime('%a %d %b, %H:%M', time.localtime(t))
 
 # ---------- live watching ----------
+LIVE_FILE = os.path.join(HOME, 'live.json')
+def remember_live(cid, on):
+    try: s = set(json.load(open(LIVE_FILE)))
+    except Exception: s = set()
+    (s.add if on else s.discard)(cid); S.write_json(LIVE_FILE, sorted(s))
+
 def start_live(cid):
+    remember_live(cid, True)
     if alive(live.get(cid, {}).get('p')): return
     env = dict(os.environ, CATWATCH_HOME=HOME)
     logf = open(os.path.join(OUT, f'live_{cid}.out'), 'a')
     live[cid] = {'p': subprocess.Popen([sys.executable, os.path.join(HERE, 'agent.py'), '--out', OUT, '--cam', cid], cwd=HERE, env=env, stdout=logf, stderr=logf), 'since': time.time()}
     logf.close()
 
-def stop_live(cid):
+def stop_live(cid, forget=True):
+    if forget: remember_live(cid, False)
     kill(live.get(cid, {}).get('p')); live.pop(cid, None)
 
 # ---------- searching past recordings ----------
@@ -171,7 +179,7 @@ def auto_loop():
         time.sleep(int(os.environ.get('CATWATCH_AUTO_TICK', '30')))
 
 def stop_all():
-    for c in list(live): stop_live(c)
+    for c in list(live): stop_live(c, forget=False)   # closing Cat Watch keeps the setting for next time
     for c in list(search): stop_search(c)
 atexit.register(stop_all)
 
@@ -451,6 +459,11 @@ class H(BaseHTTPRequestHandler):
 def main():
     srv = ThreadingHTTPServer(('127.0.0.1', PORT), H)
     threading.Thread(target=auto_loop, daemon=True).start()
+    try:                                                  # watch the same cameras live as last time
+        have = {x['id'] for x in load()['cams']}
+        for cid in json.load(open(LIVE_FILE)):
+            if cid in have: start_live(cid)
+    except Exception: pass
     url = f'http://127.0.0.1:{PORT}/'
     print('Cat Watch is open at', url, '(only on this computer). Close this window to stop.', flush=True)
     if not os.environ.get('CATWATCH_NOBROWSER'): threading.Timer(0.8, lambda: webbrowser.open(url)).start()

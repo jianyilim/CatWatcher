@@ -172,8 +172,17 @@ class Detector:
         if self.live: notify('Cat Watch', f'Possible cat on {self.name} - open Cat Watch to check')
 
 
+TESLA_RE = re.compile(r"(20\d{2})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})-(front|back|left_repeater|right_repeater|left_pillar|right_pillar|left|right)\.mp4$", re.I)
+def tesla_clip(path):
+    """Tesla dashcam / Sentry clip: (start time, camera) from its name, else None."""
+    m = TESLA_RE.search(os.path.basename(path))
+    if not m: return None
+    return time.mktime(time.strptime(''.join(m.groups()[:6]), '%Y%m%d%H%M%S')), m.group(7).lower()
+
 def file_start_time(path):
     """When a downloaded clip was recorded: from the file's own metadata, then its name, then its date on disk."""
+    t = tesla_clip(path)
+    if t: return t[0], 'from the Tesla file name'
     try:
         r = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format_tags=creation_time', '-of', 'csv=p=0', path], capture_output=True, text=True, timeout=20)
         v = r.stdout.strip()
@@ -297,14 +306,19 @@ def files_mode(a, det):
     to = max((s + d for (s, _), d in zip(starts, durs)), default=frm)
     pr = Progress(os.path.join(a.out, f'search_{a.cam or "files"}.json'), det, frm, to)
     pr.P(started=time.time(), **{'from': frm, 'to': to})
-    total = sum(durs) or 1; done = 0; started = time.time()
+    total = sum(durs) or 1; done = 0; started = time.time(); base_name = det.name
     for f, (s, how), d in zip(files, starts, durs):
         before = det.found; mv0 = det.moves
+        tes = tesla_clip(f)
+        if tes:                                   # a moving car: everything moves, so only the cat detector is used
+            det.name = safe_name('Tesla ' + tes[1].replace('_', ' '), 'Tesla'); det.movement = False; step = 0.5
+        else:
+            det.name = base_name; det.movement = True; step = 1.0
         pr.P(msg=f'Checking {os.path.basename(f)} (starts {pr.fmt(s)}, time {how})')
         def prog(t, done=done):
             el = time.time() - started; cov = max(1, done + (t - s))
             pr.P(pos=t, eta=max(0, (total - cov) * el / cov))
-        check_file(f, s, det, step=1.0, progress=prog)
+        check_file(f, s, det, step=step, progress=prog)
         done += d; new = det.found - before
         pr.act(f'Checked {os.path.basename(f)} ({pr.fmt(s)} - {pr.fmt(s + d)}, time {how}): ' + (plural(new, 'possible cat') if new else 'no cats') + (f', {plural(det.moves - mv0, "movement")}' if det.moves - mv0 else ''))
     pr.P(status='done', pos=to, msg='Finished', finished=time.time(), eta=0)
