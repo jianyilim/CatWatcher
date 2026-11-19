@@ -559,7 +559,7 @@ def history(a, det, cfg):
             act(f'No video received for {fmt(base)} (camera busy or nothing recorded), trying again')
             if fails >= 4:
                 act(f'Skipped 5 minutes at {fmt(base)}: the camera gave no recording')
-                recent = time.time() - base < 1200       # the camera may not have finished saving the last few minutes yet
+                recent = time.time() - base < 2400       # the camera can take over 20 minutes to make new footage playable
                 if (busy_seen or recent) and not gap[0]: gap[0] = base; P(gap=base)    # checked again next time
                 midnight = datetime.datetime.combine(datetime.date.fromtimestamp(base) + datetime.timedelta(days=1), datetime.time()).timestamp()
                 # the camera keeps each day separately: just before midnight, carry on at midnight, not 5 minutes later

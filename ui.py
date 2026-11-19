@@ -120,7 +120,7 @@ def search_info(cid):
 
 # ---------- keeping up: carry on from where the last search reached ----------
 AUTO_EVERY = int(os.environ.get('CATWATCH_AUTO_EVERY', '600'))   # catch up once it is this many seconds behind
-EDGE = int(os.environ.get('CATWATCH_EDGE', '900'))               # cameras take 10-15 minutes before new footage can be played back
+EDGE = int(os.environ.get('CATWATCH_EDGE', '1500'))              # cameras can take 10-25 minutes before new footage can be played back
 AUTO_ON = os.environ.get('CATWATCH_AUTO', '1') != '0'
 CFG_LOCK = threading.Lock()
 paused, last_auto = set(), {}
