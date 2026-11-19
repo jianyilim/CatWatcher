@@ -183,6 +183,17 @@ footer{margin-top:32px;font-size:13px;color:var(--t3)}
 #lb .row button{flex:1;height:40px;border-radius:10px;border:1px solid rgba(237,237,240,.14);background:#222226;color:#ededf0;cursor:pointer}
 #lb .row button.pri{background:#ededf0;color:#141416;border-color:#ededf0}
 #lb button:disabled{opacity:.4}
+#lb .vc{background:#222226;border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+#lb .vc .hd{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:14px;font-weight:500}
+#lb .seg2{display:flex;background:#19191c;border:1px solid rgba(237,237,240,.08);border-radius:9px;padding:2px}
+#lb .seg2 button{flex:1;height:28px;border:0;background:transparent;color:#a3a3ab;font:inherit;font-size:13px;border-radius:7px;cursor:pointer;font-variant-numeric:tabular-nums}
+#lb .seg2 button.on{background:#34343a;color:#ededf0}
+#lb .seg2 button:focus-visible,#lb .vbtn:focus-visible{outline:2px solid #e9b65a;outline-offset:1px}
+#lb .vbtn{display:flex;align-items:center;justify-content:center;gap:8px;height:40px;border-radius:10px;border:0;background:#ededf0;color:#141416;font:inherit;font-size:14px;font-weight:500;cursor:pointer}
+#lb .vbtn:hover{background:#ffffff}
+#lb .vc video{width:100%;border-radius:8px;background:#000;display:block}
+#lb .vc .note{color:#85858d;font-size:12px;line-height:16px}
+#lb .vc .err{color:#e5484d;font-size:13px}
 </style>
 </head>
 <body>
@@ -437,30 +448,32 @@ function openLb(i,keep){
   $('lb').style.display='block';
 }
 let clipTimer=null;
-const SPAN_LABEL={10:'±10 seconds',30:'±30 seconds',60:'±1 minute',120:'±2 minutes'};
+const SPAN_LABEL={10:'±10 seconds',30:'±30 seconds',60:'±1 minute',120:'±2 minutes'}, SPAN_SHORT={10:'±10s',30:'±30s',60:'±1m',120:'±2m'};
 function clipSpan(){try{return +(localStorage.getItem('clipSpan')||10)}catch(e){return 10}}
+const PLAY='<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 5v14l12-7z"/></svg>';
 async function showClip(x){
   clearTimeout(clipTimer);
   const box=$('lbclip'), span=clipSpan(), mine=()=>lbi>=0&&shown[lbi]&&shown[lbi].file===x.file&&clipSpan()===span;
   let s; try{s=await api('/api/clip?file='+encodeURIComponent(x.file)+'&span='+span)}catch(e){s={status:'error',msg:'Could not reach Cat Watch'}}
   if(!mine())return;
-  const pick=`<select id="lbspan" aria-label="Video length" style="height:36px">${Object.entries(SPAN_LABEL).map(([v,l])=>`<option value="${v}" ${+v===span?'selected':''}>${l}</option>`).join('')}</select>`;
-  const wire=()=>{const el=$('lbspan'); if(el) el.onchange=()=>{try{localStorage.setItem('clipSpan',el.value)}catch(e){} box.innerHTML=''; showClip(x);};};
+  const seg=`<div class="seg2" role="group" aria-label="Video length">${Object.keys(SPAN_SHORT).map(v=>`<button data-span="${v}" class="${+v===span?'on':''}" aria-pressed="${+v===span}" title="${SPAN_LABEL[v]} around the photo">${SPAN_SHORT[v]}</button>`).join('')}</div>`;
+  const wire=()=>box.querySelectorAll('[data-span]').forEach(b=>b.onclick=()=>{try{localStorage.setItem('clipSpan',b.dataset.span)}catch(e){} box.dataset.span=''; showClip(x);});
   if(s.status==='done'){
     if(!box.querySelector('video')||box.dataset.span!==String(span)){
       box.dataset.span=span;
-      box.innerHTML=`<div class="k">Video, ${SPAN_LABEL[span]} around the photo</div><video controls playsinline preload="metadata" src="${s.url}" style="width:100%;border-radius:8px;margin-top:6px;background:#000"></video><div class="row" style="margin-top:6px;align-items:center;gap:10px"><a href="${s.url}" download="${esc(x.file.replace('.jpg','_'+span+'s.mp4'))}">Save video</a><span style="flex:1"></span>${pick}</div>`;
+      box.innerHTML=`<div class="vc"><div class="hd"><span>Video</span><a href="${s.url}" download="${esc(x.file.replace('.jpg','_'+span+'s.mp4'))}">Save</a></div>${seg}<video controls playsinline preload="metadata" src="${s.url}"></video><div class="note">${SPAN_LABEL[span]} around the photo</div></div>`;
       wire();
     }
     return;
   }
   box.dataset.span='';
-  if(s.status==='running'){box.innerHTML=`<div class="doing"><span class="spin"></span><span>${esc(s.msg||'Getting the video')}</span></div>`; clipTimer=setTimeout(()=>showClip(x),2000); return;}
-  const est=x.mode==='file'?'Cut from the video file, a few seconds':`From the camera, about ${span<=10?'30 seconds':span<=30?'1 minute':span<=60?'2½ minutes':'5 minutes'}`;
-  box.innerHTML=(s.status==='error'?`<div style="color:var(--neg);font-size:13px;margin-bottom:8px">${esc(s.msg)}</div>`:'')+
-    `<div class="row" style="align-items:center;gap:8px"><button id="lbvid">Get video</button>${pick}</div><div class="k" style="margin-top:6px">${est}</div>`;
+  if(s.status==='running'){box.innerHTML=`<div class="vc"><div class="hd"><span>Video</span></div><div class="doing"><span class="spin"></span><span>${esc(s.msg||'Getting the video')}</span></div></div>`; clipTimer=setTimeout(()=>showClip(x),2000); return;}
+  const est=x.mode==='file'?'Cut from the video file, takes a few seconds':`Fetched from the camera, takes about ${span<=10?'40 seconds':span<=30?'1 minute':span<=60?'2½ minutes':'5 minutes'}`;
+  box.innerHTML=`<div class="vc"><div class="hd"><span>Video around this moment</span></div>${seg}`+
+    (s.status==='error'?`<div class="err">${esc(s.msg)}</div>`:'')+
+    `<button class="vbtn" id="lbvid">${PLAY}Get video</button><div class="note">${est}</div></div>`;
   wire();
-  $('lbvid').onclick=async()=>{box.innerHTML='<div class="doing"><span class="spin"></span><span>Starting</span></div>'; await api('/api/clip',{file:x.file,span}); showClip(x);};
+  $('lbvid').onclick=async()=>{box.innerHTML='<div class="vc"><div class="hd"><span>Video</span></div><div class="doing"><span class="spin"></span><span>Starting</span></div></div>'; await api('/api/clip',{file:x.file,span}); showClip(x);};
 }
 function closeLb(){clearTimeout(clipTimer);$('lb').style.display='none';lbi=-1;render();}
 $('lbclose').onclick=closeLb;
