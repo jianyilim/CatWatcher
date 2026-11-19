@@ -283,30 +283,35 @@ def snapshots(limit=5000):
 # ---------- a video of the minute before and after a photo ----------
 CLIPS = os.path.join(OUT, '_clips'); clip_jobs = {}
 def camkey(x): return re.sub(r'[^A-Za-z0-9_-]+', '-', x.get('name', 'camera')).strip('-') or x['id']
-def clip_target(file):
+SPANS = (10, 30, 60, 120)
+def span_of(v):
+    try: v = int(float(v))
+    except Exception: v = 10
+    return v if v in SPANS else 10
+def clip_target(file, span=10):
     m = SNAP_RE.match(os.path.basename(file or '').replace('.jpg', '_crop.jpg'))
     if not m: return None, 'Unknown photo'
     t = time.mktime(time.strptime(m.group('ts'), '%Y-%m-%d_%H%M%S'))
-    out = os.path.join(CLIPS, os.path.basename(file).replace('.jpg', '.mp4'))
-    if m.group('mode') == 'FILE': return {'t': t, 'out': out, 'cid': None}, ''
+    out = os.path.join(CLIPS, os.path.basename(file).replace('.jpg', f'_{span}s.mp4'))
+    if m.group('mode') == 'FILE': return {'t': t, 'out': out, 'cid': None, 'span': span}, ''
     x = next((x for x in load()['cams'] if camkey(x) == m.group('cam')), None)
     if not x: return None, 'The camera for this photo is no longer set up'
-    return {'t': t, 'out': out, 'cid': x['id']}, ''
-def clip_info(file):
-    tg, err = clip_target(file)
+    return {'t': t, 'out': out, 'cid': x['id'], 'span': span}, ''
+def clip_info(file, span=10):
+    tg, err = clip_target(file, span_of(span))
     if not tg: return {'status': 'error', 'msg': err}
     if os.path.exists(tg['out']): return {'status': 'done', 'url': f"/clip/{os.path.basename(tg['out'])}?t={TOKEN}"}
     try: s = json.load(open(tg['out'] + '.json'))
     except Exception: return {'status': 'none'}
-    if s.get('status') == 'running' and not alive(clip_jobs.get(file)): s = {'status': 'error', 'msg': 'Getting the video stopped unexpectedly'}
+    if s.get('status') == 'running' and not alive(clip_jobs.get((file, tg['span']))): s = {'status': 'error', 'msg': 'Getting the video stopped unexpectedly'}
     return s
-def clip_start(file):
-    tg, err = clip_target(file)
+def clip_start(file, span=10):
+    span = span_of(span); tg, err = clip_target(file, span)
     if not tg: return {'ok': False, 'msg': err}
-    cur = clip_info(file)
+    cur = clip_info(file, span)
     if cur.get('status') in ('done', 'running'): return {'ok': True, **cur}
     os.makedirs(CLIPS, exist_ok=True); S.write_json(tg['out'] + '.json', {'status': 'running', 'msg': 'Starting'})
-    cmd = [sys.executable, os.path.join(HERE, 'agent.py'), '--out', OUT, '--clip-at', str(tg['t']), '--clip-out', tg['out']]
+    cmd = [sys.executable, os.path.join(HERE, 'agent.py'), '--out', OUT, '--clip-at', str(tg['t']), '--clip-out', tg['out'], '--clip-span', str(span)]
     cid = tg['cid']
     if cid:
         cmd += ['--cam', cid]
@@ -317,7 +322,7 @@ def clip_start(file):
         if not ups: return {'ok': False, 'msg': 'The video file for this photo is no longer there'}
         cmd += ['--files'] + ups
     p = subprocess.Popen(cmd, cwd=HERE, env=dict(os.environ, CATWATCH_HOME=HOME), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    clip_jobs[file] = p
+    clip_jobs[(file, span)] = p
     def after():
         p.wait()
         if cid: paused.discard(cid)                        # its searches carry on from where they were
@@ -470,7 +475,8 @@ class H(BaseHTTPRequestHandler):
         if not self._auth(): return self._json({'error': 'forbidden'}, 403)
         if u.path == '/api/status': return self._json(status())
         if u.path == '/api/snapshots': return self._json(snapshots())
-        if u.path == '/api/clip': return self._json(clip_info(parse_qs(u.query).get('file', [''])[0]))
+        if u.path == '/api/clip':
+            q = parse_qs(u.query); return self._json(clip_info(q.get('file', [''])[0], q.get('span', ['10'])[0]))
         if u.path.startswith('/clip/'): return self._video(unquote(u.path[6:]))
         if u.path.startswith('/snap/'):
             parts = unquote(u.path[6:]).split('/')
@@ -506,7 +512,7 @@ class H(BaseHTTPRequestHandler):
             if nm and os.path.isfile(os.path.join(UPLOADS, nm)): os.remove(os.path.join(UPLOADS, nm))
             return self._json({'ok': True})
         if p == '/api/connect': return self._json(connect(d))
-        if p == '/api/clip': return self._json(clip_start(d.get('file', '')))
+        if p == '/api/clip': return self._json(clip_start(d.get('file', ''), d.get('span', 10)))
         if p == '/api/hik_channels': return self._json(hik_channels(d))
         if p == '/api/auto':
             with CFG_LOCK:

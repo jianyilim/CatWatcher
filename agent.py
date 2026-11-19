@@ -602,7 +602,8 @@ def make_clip(a, cfg):
         elif 'Tapo' in b:
             raise RuntimeError('videos from Tapo cameras are not supported yet; use the Tapo app')
         else:                                                  # TP-Link VIGI: play the recording back at normal speed
-            P(msg='Getting the video from the camera (about 2 minutes)')
+            wait = int(dur * 1.15 + 10)
+            P(msg=f'Getting the video from the camera (about {wait} seconds)' if wait < 90 else f'Getting the video from the camera (about {round(wait / 60)} minutes)')
             pos, fails = t0, 0                                 # the camera stops after about 40 seconds, so fetch in pieces
             while pos < t0 + dur - 2 and fails < 4:
                 piece = f'{raw}.{len(parts)}.ts'
@@ -646,7 +647,7 @@ def main():
     ap.add_argument('--cam', help='camera id from the setup (default: the first camera)')
     ap.add_argument('--files', nargs='+', help='check these downloaded video files (any camera brand)')
     ap.add_argument('--clip-at', type=float, help=argparse.SUPPRESS); ap.add_argument('--clip-out', help=argparse.SUPPRESS)
-    ap.add_argument('--clip-span', type=float, default=60, help=argparse.SUPPRESS)
+    ap.add_argument('--clip-span', type=float, default=10, help=argparse.SUPPRESS)
     ap.add_argument('--starts', nargs='+', help='recording start time of each file (epoch seconds, or auto)')
     ap.add_argument('--test-chunk', help=argparse.SUPPRESS); ap.add_argument('--test-start', type=float, help=argparse.SUPPRESS)
     a = ap.parse_args()
