@@ -120,7 +120,7 @@ def search_info(cid):
 
 # ---------- keeping up: carry on from where the last search reached ----------
 AUTO_EVERY = int(os.environ.get('CATWATCH_AUTO_EVERY', '600'))   # catch up once it is this many seconds behind
-EDGE = 120                                                        # leave the last 2 minutes: still being recorded
+EDGE = int(os.environ.get('CATWATCH_EDGE', '900'))               # cameras take 10-15 minutes before new footage can be played back
 AUTO_ON = os.environ.get('CATWATCH_AUTO', '1') != '0'
 CFG_LOCK = threading.Lock()
 paused, last_auto = set(), {}
@@ -182,6 +182,9 @@ def stop_all():
     for c in list(live): stop_live(c, forget=False)   # closing Cat Watch keeps the setting for next time
     for c in list(search): stop_search(c)
 atexit.register(stop_all)
+import signal
+try: signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))   # stopped by the system: close searches and live watching cleanly
+except Exception: pass
 
 # ---------- Claude second opinion ----------
 PROMPT = ('You are checking a home CCTV frame for a missing GOLDEN British Shorthair cat: stocky, round face, golden or cream coat. '
