@@ -731,11 +731,16 @@ def main():
     det = Detector(model, dev, a.out, safe_name(a.name, a.cam or 'camera'), a.conf, a.cooldown or 600, a.always_check, live=True)
     log(a.out, 'watching live', a.name, 'model', mname, dev)
     is_file = os.path.exists(a.source); t0 = time.time()
+    fails = 0
     while True:
+        started = time.time()
         for k, fr in enumerate(frames(a.source, a.fps)):
             det.feed(fr, (t0 + k / a.fps) if is_file else time.time())
         if is_file: break
-        log(a.out, 'stream ended or unavailable, retrying in 20 s'); time.sleep(20)
+        ran = time.time() - started
+        fails = 0 if ran > 60 else fails + 1        # a stream that ran a while and then ended: reconnect straight away
+        wait = 2 if fails == 0 else min(60, 5 * fails)
+        log(a.out, f'stream ended after {int(ran)} s, reconnecting in {wait} s'); time.sleep(wait)
     log(a.out, 'finished')
 
 if __name__ == '__main__':
