@@ -314,11 +314,11 @@ def tapo_history(a, det, cfg):
         try:
             path = tapo_download(tapo, s, e, tc, folder)
         except Exception as ex:
-            pr.act(f'Could not download the recording at {pr.fmt(rs)}: ' + repr(ex)[:100]); continue
-        if not path: pr.act(f'Recording at {pr.fmt(rs)} is still being written, skipped'); continue
+            pr.act(f'Could not download the recording at {pr.fmt(rs)}: ' + repr(ex)[:100]); gap_at(pr, rs); continue
+        if not path: pr.act(f'Recording at {pr.fmt(rs)} is still being written, skipped'); gap_at(pr, rs); continue
         before = det.found
         pr.P(msg=f'Checking recording {n} of {len(items)} ({pr.fmt(rs)})')
-        check_file(path, rs, det, step=1.0, stop_at=a.to, progress=lambda t: pr.P(pos=t))
+        check_file(path, rs, det, step=1.0, stop_at=a.to, progress=lambda t: pr.P(pos=t), start_at=a.frm)
         try: os.remove(path)
         except Exception: pass
         el = time.time() - started; cov = max(1, (e + tc) - a.frm)
@@ -406,6 +406,12 @@ def hik_download(cfg, uri, path):
             for chunk in r.iter_content(1 << 20): f.write(chunk)
     return path if os.path.getsize(path) > 10000 else None
 
+def gap_at(pr, t):
+    """Remembers the first part of the search that could not be checked, so the next catch-up starts there."""
+    try: g = json.load(open(pr.path)).get('gap')
+    except Exception: g = None
+    if g is None or t < g: pr.P(gap=t)
+
 def segment_history(a, det, label, lister, downloader):
     """Search for cameras that hand over whole recordings: list them, download each one locally, check it, delete it."""
     pr = Progress(os.path.join(a.out, f'search_{a.cam or "default"}.json'), det, a.frm, a.to)
@@ -427,8 +433,8 @@ def segment_history(a, det, label, lister, downloader):
             try:
                 got = downloader(ref, path)
             except Exception as ex:
-                pr.act(f'Could not download the recording at {pr.fmt(s)}: ' + repr(ex)[:100]); continue
-            if not got: pr.act(f'Recording at {pr.fmt(s)} could not be downloaded (still being written?), skipped'); continue
+                pr.act(f'Could not download the recording at {pr.fmt(s)}: ' + repr(ex)[:100]); gap_at(pr, s); continue
+            if not got: pr.act(f'Recording at {pr.fmt(s)} could not be downloaded (still being written?), skipped'); gap_at(pr, s); continue
             pr.P(msg=f'Checking recording {n} of {len(items)} ({pr.fmt(s)})')
             check_file(got, s, det, step=1.0, stop_at=a.to, progress=lambda t: pr.P(pos=t), start_at=a.frm)
         finally:
@@ -443,6 +449,7 @@ def segment_history(a, det, label, lister, downloader):
 
 def history(a, det, cfg):
     """Searches past recordings. Video from the camera is checked frame by frame while it is still arriving."""
+    gap = [None]; busy_seen = False
     import threading
     prog = os.path.join(a.out, f'search_{a.cam or "default"}.json')
     fmt = lambda t: datetime.datetime.fromtimestamp(t).strftime('%a %d %b %H:%M')
@@ -489,6 +496,7 @@ def history(a, det, cfg):
                 except Exception: pass
         th = threading.Thread(target=feed_input, daemon=True); th.start()
         det.reset(); before = det.found; mv0 = det.moves; k = 0; t = base; hit_end = False
+        if fails == 0: busy_seen = False
         while True:
             b = ff.stdout.read(n)
             if len(b) < n: break
@@ -504,8 +512,12 @@ def history(a, det, cfg):
         real = (k / 2.0) * scale
         if not hit_end and (nb < 300000 or k < 10):
             fails += 1; log(a.out, 'no video for', datetime.datetime.fromtimestamp(base).strftime('%d/%m %H:%M'), 'error', err)
+            if 'busy' in str(err).lower() or '52405' in str(err): busy_seen = True
             act(f'No video received for {fmt(base)} (camera busy or nothing recorded), trying again')
-            if fails >= 4: act(f'Skipped 5 minutes at {fmt(base)}: the camera gave no recording'); pos += 300; fails = 0
+            if fails >= 4:
+                act(f'Skipped 5 minutes at {fmt(base)}: the camera gave no recording')
+                if busy_seen and not gap[0]: gap[0] = base; P(gap=base)    # checked again next time
+                pos += 300; fails = 0; busy_seen = False
             if a.test_chunk: break
             time.sleep(15); continue
         fails = 0; end = min(base + real, a.to); new = det.found - before

@@ -47,6 +47,10 @@ header{display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:24px 0 20
 .card{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:var(--shadow);padding:24px;margin-top:16px}
 .card h2{margin:0 0 4px;font-size:18px;font-weight:600}
 .lead{margin:0 0 20px;color:var(--t2);font-size:14px}
+.keep{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;margin:0 0 20px;border:1px solid var(--line);border-radius:12px;background:var(--raised)}
+.keep input{accent-color:var(--t1);margin:3px 0 0;width:16px;height:16px;flex:none}
+.keep b{display:block;font-size:14px;font-weight:500}
+.keep .kh{display:block;margin-top:4px;font-size:13px;color:var(--t2);line-height:1.5}
 label.l{display:block;font-size:13px;color:var(--t2);margin:0 0 6px}
 input[type=text],input[type=password],input[type=datetime-local],select{width:100%;height:44px;padding:0 12px;border-radius:10px;border:1px solid var(--line2);background:var(--raised);transition:border-color 150ms var(--ease)}
 input:focus,select:focus{outline:none;border-color:var(--t2)}
@@ -186,6 +190,7 @@ footer{margin-top:32px;font-size:13px;color:var(--t3)}
   <section class="card">
     <h2>Search recordings</h2>
     <p class="lead">Goes through what your cameras recorded and saves a frame of anything cat-shaped, with the exact time</p>
+    <label class="keep" id="keeprow"><input type="checkbox" id="keep" checked><span><b>Keep checking new recordings</b><span class="kh" id="keephelp">Each time Cat Watch opens, it carries on from where it last stopped, then checks again every 10 minutes while it stays open</span></span></label>
     <div class="form">
       <div><label class="l" for="sfrom">From</label><input type="datetime-local" id="sfrom"></div>
       <div><label class="l" for="sto">To (empty for now)</label><input type="datetime-local" id="sto"></div>
@@ -301,6 +306,7 @@ async function refresh(){
   const parts=[];
   searching.forEach(c=>parts.push(`<b>${esc(c.name)}</b>: searching, checked to <span class="mono">${esc(short(c.search.pos))}</span>${c.search.eta!==undefined?', about '+dur(c.search.eta)+' left':''}`));
   watching.forEach(c=>parts.push(`<b>${esc(c.name)}</b>: watching live`));
+  if(st.auto) cams.filter(c=>c.searchable&&c.checked_until&&!(c.search&&c.search.status==='running')).forEach(c=>parts.push(`<b>${esc(c.name)}</b>: checked up to <span class="mono">${esc(short(c.checked_until))}</span>${c.paused?', paused':', next check about '+hm(c.next_check)}`));
   $('now').classList.toggle('on',parts.length>0);
   $('nowtext').innerHTML=parts.length?parts.join('<br>')+(st.checking?`<div class="sub">Claude is checking ${plural(st.checking,'photo')}</div>`:'')
     :(cams.length?'Nothing running':'No cameras yet. Add one at the bottom of the page')+(st.checking?`<div class="sub">Claude is checking ${plural(st.checking,'photo')}</div>`:'');
@@ -320,6 +326,11 @@ async function refresh(){
   document.querySelectorAll('[data-rm]').forEach(b=>b.onclick=async()=>{if(confirm('Remove this camera? Saved frames are kept.')){await api('/api/remove',{id:b.dataset.rm});refresh();}});
   $('toggle').disabled=!cams.length; $('toggle').textContent=watching.length?'Stop watching':'Start watching'; $('toggle').className='btn '+(watching.length?'stop':'ghost');
   $('watchhelp').textContent=watching.length?('Watching '+watching.map(c=>c.name).join(' and ')+' now'):'Watches your cameras from now on and shows a notification when a cat appears';
+  $('keep').checked=!!st.auto;
+  const sc=cams.filter(c=>c.searchable);
+  $('keeprow').classList.toggle('hidden',!sc.length);
+  $('keephelp').innerHTML=!st.auto?'Off. Searches only run when you press Search':
+    sc.map(c=>`${esc(c.name)}: `+(c.paused?'paused, press Search to carry on':c.checked_until?`checked from when he went missing up to <span class="mono">${esc(short(c.checked_until))}</span>`:'not checked yet, starts in a moment')).join('<br>');
   renderProgs(); renderAsk(); renderFiles(); first=false;
 }
 function renderProgs(){
@@ -330,7 +341,7 @@ function renderProgs(){
     const mine=snaps.filter(x=>x.mode==='past'&&x.camkey===c.key&&x.t>=s.from&&x.t<=s.to);
     const marks=mine.map(x=>`<div class="mk ${x.kind==='movement'?'mv':''}" style="left:${100*(x.t-s.from)/span}%" title="${esc(stamp(x.t))}" data-file="${esc(x.file)}"></div>`).join('');
     const acts=(s.activity||[]).slice().reverse().slice(0,12).map(a=>`<li class="${/^Possible cat/.test(a[1])?'cat':''}"><time>${hm(a[0])}</time><span>${esc(a[1])}</span></li>`).join('');
-    const stt=run?'Searching':done?'Finished':s.status==='error'?'Stopped unexpectedly':'Stopped';
+    const stt=run?(s.auto?'Checking new recordings':'Searching'):done?'Finished':s.status==='error'?'Stopped unexpectedly':'Stopped';
     return `<div class="prog">
       <div class="ph"><b>${esc(c.name)}</b><span class="ip">${esc(c.ip)}</span><span class="st">${stt}</span></div>
       <div class="strip ${done?'fin':''}"><div class="done" style="width:${p}%"></div>${days}${marks}</div>
@@ -438,6 +449,7 @@ $('sbtn').onclick=async()=>{
   $('spw').value=''; $('smsg').innerHTML='<div class="msg '+(r.ok?'ok':'err')+'">'+esc(r.msg)+'</div>';
   refresh(); refreshSnaps();
 };
+$('keep').onchange=async()=>{await api('/api/auto',{on:$('keep').checked});refresh();};
 function tapoUi(){const t=$('ctype').value==='TP-Link Tapo';$('tapobox').classList.toggle('hidden',!t);$('tapohelp').classList.toggle('hidden',!t);}
 $('ctype').onchange=tapoUi;
 let upl={};  // name -> {pct, done, err}

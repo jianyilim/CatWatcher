@@ -2,7 +2,8 @@
 
 Helps find a missing cat using your **own** home cameras, entirely on your **own** computer.
 
-- **Search past recordings** from when the cat went missing (TP-Link VIGI; TP-Link Tapo experimental).
+- **Search past recordings** from when the cat went missing (TP-Link VIGI, Hikvision; TP-Link Tapo experimental).
+- **Keeps up by itself:** each time Cat Watch opens it carries on from where it last stopped, then checks new recordings every 10 minutes while it stays open. Nobody has to keep it running; just open it now and then.
 - **Check video files** downloaded from any camera's app or memory card (Tapo, Eufy, any brand).
 - **Watch live** and get a desktop notification when something cat-shaped appears.
 - Every find is saved as a photo with the camera and the exact recorded time, labelled **Cat**, **Dog-like** or **Movement**
@@ -24,6 +25,7 @@ Helps find a missing cat using your **own** home cameras, entirely on your **own
 ## Camera notes
 
 - **VIGI:** found automatically on your Wi-Fi; the search reads the camera's own recordings.
+- **Hikvision:** cameras and recorders are found on your Wi-Fi; the search lists and downloads recordings with the admin password, checks each one, then deletes it.
 - **Tapo:** create a *Camera Account* in the Tapo app (camera settings, Advanced settings, Camera account) and use it in Cat Watch.
   Searching the memory card also needs the Tapo account password (uses the unofficial `pytapo` library; untested on a real Tapo).
 - **Others (Eufy etc.):** download clips from the camera's app and use *Check video files*. Live watching works if the camera offers an RTSP stream.

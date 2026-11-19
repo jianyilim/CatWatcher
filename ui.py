@@ -79,11 +79,11 @@ def stop_live(cid):
 # ---------- searching past recordings ----------
 def sfile(cid): return os.path.join(OUT, f'search_{cid}.json')
 
-def start_search(cid, frm, to):
+def start_search(cid, frm, to, auto=False):
     stop_search(cid, note=False)
     env = dict(os.environ, CATWATCH_HOME=HOME)
     S.write_json(sfile(cid), {'status': 'running', 'from': frm, 'to': to, 'pos': frm, 'found': 0, 'msg': 'Starting...',
-               'activity': [[time.time(), f'Search started: {fmt(frm)} to {fmt(to)}']]})
+               'auto': auto, 'activity': [[time.time(), ('Keeping up: checking new recordings ' if auto else 'Search started: ') + f'{fmt(frm)} to {fmt(to)}']]})
     logf = open(os.path.join(OUT, f'search_{cid}.out'), 'a')
     search[cid] = subprocess.Popen([sys.executable, os.path.join(HERE, 'agent.py'), '--out', OUT, '--cam', cid, '--from', str(frm), '--to', str(to)],
                                    cwd=HERE, env=env, stdout=logf, stderr=logf)
@@ -108,6 +108,67 @@ def search_info(cid):
         d['status'] = 'error' if (p is not None and p.returncode not in (0, None, -15)) else 'stopped'
         if d['status'] == 'error': d['msg'] = 'The search stopped unexpectedly.'
     return d
+
+
+# ---------- keeping up: carry on from where the last search reached ----------
+AUTO_EVERY = int(os.environ.get('CATWATCH_AUTO_EVERY', '600'))   # catch up once it is this many seconds behind
+EDGE = 120                                                        # leave the last 2 minutes: still being recorded
+AUTO_ON = os.environ.get('CATWATCH_AUTO', '1') != '0'
+CFG_LOCK = threading.Lock()
+paused, last_auto = set(), {}
+
+def searchable(x):
+    b = x.get('brand') or ''
+    return bool(x.get('pw')) and ('VIGI' in b or 'Hikvision' in b or ('Tapo' in b and x.get('cloud_pw')))
+
+CHECKED = os.path.join(HOME, 'checked.json')   # how far each camera has been checked, kept apart from the camera settings
+
+def ckey(x): return f"{x['id']}@{x.get('ip', '')}"   # a different camera added later under the same id starts fresh
+
+def checked_marks():
+    try: return json.load(open(CHECKED))
+    except Exception: return {}
+
+def update_checked():
+    """Moves each camera's 'checked up to' mark forward, but only over time checked without a hole since he went missing."""
+    with CFG_LOCK:
+        c = load(); marks = checked_marks(); changed = False
+        start = parse_local(c['missing_since'])
+        for x in c['cams']:
+            d = search_info(x['id'])
+            if not d or 'from' not in d or 'pos' not in d: continue
+            base = marks.get(ckey(x)) or start
+            if d['from'] > base + 120: continue           # this search began after a stretch nobody has checked
+            reach = d['pos']
+            if d.get('gap') is not None: reach = min(reach, d['gap'])
+            if reach > base + 1:
+                marks[ckey(x)] = reach; changed = True
+        if changed: S.write_json(CHECKED, marks)
+        for x in c['cams']: x['checked_until'] = marks.get(ckey(x))
+        return c
+
+def auto_loop():
+    while True:
+        try:
+            c = update_checked()
+            if AUTO_ON and c.get('auto', True):
+                start = parse_local(c['missing_since']); now = time.time()
+                for x in c['cams']:
+                    cid = x['id']
+                    if cid in paused or not searchable(x) or alive(search.get(cid)): continue
+                    base = max(x.get('checked_until') or start, start)
+                    target = now - EDGE
+                    d = search_info(cid) or {}
+                    gapmin = int(os.environ.get('CATWATCH_AUTO_WAIT', '300'))
+                    wait = gapmin * 3 if d.get('status') == 'error' else gapmin   # do not hammer a camera that just failed
+                    first_time = cid not in last_auto
+                    if target - base < (60 if first_time else AUTO_EVERY): continue
+                    if now - last_auto.get(cid, 0) < wait: continue
+                    last_auto[cid] = now
+                    start_search(cid, base, target, auto=True)
+        except Exception as ex:
+            print('auto check:', repr(ex)[:200], flush=True)
+        time.sleep(int(os.environ.get('CATWATCH_AUTO_TICK', '30')))
 
 def stop_all():
     for c in list(live): stop_live(c)
@@ -279,19 +340,21 @@ def do_search(d):
             else: notes.append(f'{x["name"]}: add the Tapo account password (Cameras section) to search its recordings')
         else: notes.append(f'{x["name"]}: this camera type cannot be searched directly. Download its clips and use Check video files')
     if not ready: return {'ok': False, 'msg': ' · '.join(notes)}
-    for x in ready: start_search(x['id'], frm, to)
+    for x in ready: paused.discard(x['id']); start_search(x['id'], frm, to)
     chosen = ready
     names = ' and '.join(x['name'] for x in chosen)
     msg = f'Searching {names}: {fmt(frm)} to {fmt(to)} ({(to - frm) / 3600:.1f} hours of recordings each).' + (' ' + ' · '.join(notes) if notes else '')
     return {'ok': True, 'msg': msg}
 
 def status():
-    c = load(); out = []
+    c = update_checked(); out = []
     for x in c['cams']:
         lv = live.get(x['id'], {})
         out.append({'id': x['id'], 'key': re.sub(r'[^A-Za-z0-9_-]+', '-', x.get('name', 'camera')).strip('-') or x['id'], 'name': x.get('name', 'camera'), 'ip': x.get('ip'), 'brand': x.get('brand', ''),
-                    'live': alive(lv.get('p')), 'live_since': lv.get('since'), 'search': search_info(x['id'])})
-    return {'cams': out, 'missing_since': c['missing_since'], 'claude': bool(CLAUDE), 'checking': len(pending), 'files': search_info('files'), 'uploads': uploads()}
+                    'live': alive(lv.get('p')), 'live_since': lv.get('since'), 'search': search_info(x['id']),
+                    'checked_until': x.get('checked_until'), 'paused': x['id'] in paused, 'searchable': searchable(x),
+                    'next_check': max(x.get('checked_until') or 0, parse_local(c['missing_since'])) + EDGE + AUTO_EVERY})
+    return {'cams': out, 'missing_since': c['missing_since'], 'auto': AUTO_ON and c.get('auto', True), 'auto_every': AUTO_EVERY, 'claude': bool(CLAUDE), 'checking': len(pending), 'files': search_info('files'), 'uploads': uploads()}
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -346,10 +409,15 @@ class H(BaseHTTPRequestHandler):
             if nm and os.path.isfile(os.path.join(UPLOADS, nm)): os.remove(os.path.join(UPLOADS, nm))
             return self._json({'ok': True})
         if p == '/api/connect': return self._json(connect(d))
+        if p == '/api/auto':
+            with CFG_LOCK:
+                cc = load(); cc['auto'] = bool(d.get('on')); save(cc)
+            if cc['auto']: paused.clear()
+            return self._json({'ok': True})
         if p == '/api/remove': return self._json(remove(d.get('id', '')))
         if p == '/api/search': return self._json(do_search(d))
         if p == '/api/search_stop':
-            for i in ids: stop_search(i)
+            for i in ids: stop_search(i); paused.add(i)
             return self._json({'ok': True})
         if p == '/api/start':
             if not c['cams']: return self._json({'ok': False, 'msg': 'Add a camera first.'})
@@ -362,6 +430,7 @@ class H(BaseHTTPRequestHandler):
 
 def main():
     srv = ThreadingHTTPServer(('127.0.0.1', PORT), H)
+    threading.Thread(target=auto_loop, daemon=True).start()
     url = f'http://127.0.0.1:{PORT}/'
     print('Cat Watch is open at', url, '(only on this computer). Close this window to stop.', flush=True)
     if not os.environ.get('CATWATCH_NOBROWSER'): threading.Timer(0.8, lambda: webbrowser.open(url)).start()
