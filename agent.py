@@ -66,20 +66,53 @@ atexit.register(_close_children)
 try: signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))   # stopping runs the clean-up above
 except Exception: pass
 
+def live_frames(source, fps, w, h):
+    """Live camera video read inside this process. On a Mac, a background service may not let a separate
+    ffmpeg program reach the home network (Local Network privacy), but this process is allowed."""
+    os.environ.setdefault('OPENCV_FFMPEG_CAPTURE_OPTIONS', 'rtsp_transport;tcp')
+    import cv2
+    cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
+    if not cap.isOpened():
+        print('video reader: could not open the camera stream', flush=True); return
+    step, nxt = 1.0 / fps, 0.0
+    try:
+        while True:
+            if not cap.grab(): break
+            now = time.time()
+            if now < nxt: continue
+            nxt = now + step
+            ok, fr = cap.retrieve()
+            if not ok: break
+            yield np.ascontiguousarray(cv2.resize(fr, (w, h))[:, :, ::-1])
+    finally:
+        cap.release()
+
 def frames(source, fps, w=1280, h=720, seek=0):
+    if source.lower().startswith('rtsp'):
+        yield from live_frames(source, fps, w, h); return
     cmd = ['ffmpeg', '-v', 'error']
     if source.lower().startswith('rtsp'): cmd += ['-rtsp_transport', 'tcp']
     if seek > 0: cmd += ['-ss', f'{seek:.3f}']
     cmd += ['-i', source, '-vf', f'fps={fps},scale={w}:{h}', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-']
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL); CHILDREN.append(p)
-    n = w * h * 3
+    import tempfile
+    errf = tempfile.TemporaryFile()
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=errf); CHILDREN.append(p)
+    n = w * h * 3; got = 0
     try:
         while True:
             b = p.stdout.read(n)
             if len(b) < n: break
+            got += 1
             yield np.frombuffer(b, np.uint8).reshape(h, w, 3)
     finally:
         p.kill()
+        if got == 0:                                   # say why, without the password
+            try:
+                errf.seek(0); msg = errf.read()[-400:].decode('utf8', 'ignore').strip().replace('\n', ' | ')
+                msg = re.sub(r'//[^@/]*@', '//***@', msg)
+                if msg: print('video reader:', msg[-300:], flush=True)
+            except Exception: pass
+        errf.close()
 
 class Detector:
     """Two kinds of result:
