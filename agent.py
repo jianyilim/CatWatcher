@@ -9,7 +9,7 @@ from PIL import Image, ImageDraw
 def log(out, *a):
     line = datetime.datetime.now().strftime('%d/%m %H:%M:%S ') + ' '.join(str(x) for x in a)
     print(line, flush=True)
-    open(os.path.join(out, 'agent.log'), 'a').write(line + '\n')
+    with open(os.path.join(out, 'agent.log'), 'a', encoding='utf8') as f: f.write(line + '\n')
 
 def notify(title, msg):
     if os.environ.get('CATWATCH_QUIET'): return   # tests and background checks stay silent
@@ -20,7 +20,7 @@ def notify(title, msg):
         elif s == 'Windows':
             ps = ("[reflection.assembly]::loadwithpartialname('System.Windows.Forms')|Out-Null;"
                   "$n=New-Object System.Windows.Forms.NotifyIcon;$n.Icon=[System.Drawing.SystemIcons]::Information;"
-                  f"$n.Visible=$true;$n.ShowBalloonTip(8000,'{title}','{msg}',[System.Windows.Forms.ToolTipIcon]::Info);Start-Sleep 9")
+                  f"$n.Visible=$true;$n.ShowBalloonTip(8000,'{title}','{msg}',[System.Windows.Forms.ToolTipIcon]::Info);Start-Sleep 9;$n.Dispose()")
             subprocess.Popen(['powershell', '-NoProfile', '-Command', ps])
         else:
             subprocess.run(['notify-send', title, msg], capture_output=True)
@@ -41,9 +41,14 @@ def pick_model(name):
     return 'yolo11x.pt' if device_name() in ('cuda', 'mps') else 'yolo11m.pt'
 
 def write_json(path, obj):
-    tmp = path + '.tmp'
-    with open(tmp, 'w') as f: json.dump(obj, f)
-    os.replace(tmp, path)
+    """Writes a whole file at once. Windows refuses to replace a file another program is reading, so retry briefly."""
+    tmp = f'{path}.{os.getpid()}.tmp'
+    with open(tmp, 'w', encoding='utf8') as f: json.dump(obj, f)
+    for i in range(20):
+        try: os.replace(tmp, path); return
+        except PermissionError:
+            if i == 19: raise
+            time.sleep(0.05)
 
 def plural(n, word): return f'{n} {word}' + ('' if n == 1 else 's')
 

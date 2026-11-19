@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Cat Watch setup: finds cameras on YOUR OWN network, then asks YOU for the camera password.
 The password is typed on this computer, saved only in a private file on this computer, and never sent anywhere."""
-import argparse, concurrent.futures as cf, getpass, json, os, socket, ssl, subprocess, sys, re, urllib.request, urllib.error
+import argparse, concurrent.futures as cf, getpass, json, os, socket, ssl, subprocess, sys, re, time, urllib.request, urllib.error
 
 CONF_DIR = os.environ.get('CATWATCH_HOME', os.path.expanduser('~/.catwatch'))
 CONF = os.path.join(CONF_DIR, 'config.json')
@@ -93,9 +93,14 @@ def scan(hosts):
     return out
 
 def write_json(path, obj):
-    tmp = path + '.tmp'
-    with open(tmp, 'w') as f: json.dump(obj, f)
-    os.replace(tmp, path)
+    """Writes a whole file at once. Windows refuses to replace a file another program is reading, so retry briefly."""
+    tmp = f'{path}.{os.getpid()}.tmp'
+    with open(tmp, 'w', encoding='utf8') as f: json.dump(obj, f)
+    for i in range(20):
+        try: os.replace(tmp, path); return
+        except PermissionError:
+            if i == 19: raise
+            time.sleep(0.05)
 
 def try_rtsp(ip, user, pw, brand=''):
     return probe_rtsp(ip, user, pw, brand)[0]
