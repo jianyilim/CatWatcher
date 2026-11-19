@@ -75,8 +75,10 @@ def identify(ip):
         try:                                     # Hikvision answers its ISAPI address with a login challenge
             urllib.request.urlopen(f'http://{ip}/ISAPI/System/deviceInfo', timeout=5)
         except urllib.error.HTTPError as he:
-            srv = (he.headers.get('Server') or '') + ' ' + (he.headers.get('WWW-Authenticate') or '')
-            if he.code == 401 and re.search(r'App-webs|DNVRS-Webs|DVRDVS-Webs|Hikvision|IP Camera|NVR', srv, re.I): brand = 'Hikvision'
+            try: page = he.read(4000).decode('utf8', 'ignore')
+            except Exception: page = ''
+            srv = (he.headers.get('Server') or '') + ' ' + (he.headers.get('WWW-Authenticate') or '') + ' ' + page
+            if he.code == 401 and re.search(r'App-webs|DNVRS-Webs|DVRDVS-Webs|hikvision\.com|Hikvision', srv, re.I): brand = 'Hikvision'
         except Exception:
             pass
     if brand or rtsp:
@@ -96,8 +98,13 @@ def write_json(path, obj):
     os.replace(tmp, path)
 
 def try_rtsp(ip, user, pw, brand=''):
-    """One login attempt per call: a wrong password stops at the first address, so the camera counts one failure."""
+    return probe_rtsp(ip, user, pw, brand)[0]
+
+def probe_rtsp(ip, user, pw, brand=''):
+    """Returns (url, why). why is '' on success, 'password' if the camera refused the login, 'timeout' if it never
+    answered, or 'other'. A refused login stops at the first address, so the camera counts only one failure."""
     from urllib.parse import quote
+    why = 'other'
     paths = ('Streaming/Channels/101', 'Streaming/Channels/102') if 'Hikvision' in (brand or '') else \
             ('stream1', 'stream2') if 'TP-Link' in (brand or '') else ('stream1', 'Streaming/Channels/101', 'stream2')
     for path in paths:
@@ -106,12 +113,12 @@ def try_rtsp(ip, user, pw, brand=''):
             r = subprocess.run(['ffprobe', '-v', 'error', '-rtsp_transport', 'tcp', '-show_entries', 'stream=codec_name',
                                 '-of', 'csv=p=0', url], capture_output=True, text=True, timeout=15)
         except subprocess.TimeoutExpired:
-            return None
+            why = 'timeout'; continue        # slow to answer is not a wrong password: try the next address
         if r.returncode == 0 and r.stdout.strip():
-            return url
+            return url, ''
         if '401' in r.stderr or 'Unauthorized' in r.stderr:
-            return None                      # wrong password: do not spend a second login on the other address
-    return None
+            return None, 'password'          # wrong password: do not spend a second login on the other address
+    return None, why                         # 'timeout' if any address never answered, so it was not a real login test
 
 def main():
     ap = argparse.ArgumentParser()
@@ -143,7 +150,7 @@ def main():
     for attempt in range(1, 4):
         pw = getpass.getpass('Camera password (hidden): ')
         print('Testing the stream address...')
-        url = try_rtsp(ip, user, pw)
+        url = try_rtsp(ip, user, pw, cams[ip][0])
         if url: break
         print('Could not open the video stream. Wrong password, or the camera has no RTSP account yet.')
         if attempt == 3: print('Stopping after 3 tries so the camera does not lock you out. Check the camera settings (RTSP/ONVIF account) and run setup again.'); return

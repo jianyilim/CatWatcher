@@ -12,6 +12,7 @@ def log(out, *a):
     open(os.path.join(out, 'agent.log'), 'a').write(line + '\n')
 
 def notify(title, msg):
+    if os.environ.get('CATWATCH_QUIET'): return   # tests and background checks stay silent
     try:
         s = platform.system()
         if s == 'Darwin':
@@ -49,9 +50,10 @@ def plural(n, word): return f'{n} {word}' + ('' if n == 1 else 's')
 def safe_name(n, fallback='camera'):
     return re.sub(r'[^A-Za-z0-9_-]+', '-', n).strip('-') or fallback
 
-def frames(source, fps, w=1280, h=720):
+def frames(source, fps, w=1280, h=720, seek=0):
     cmd = ['ffmpeg', '-v', 'error']
     if source.lower().startswith('rtsp'): cmd += ['-rtsp_transport', 'tcp']
+    if seek > 0: cmd += ['-ss', f'{seek:.3f}']
     cmd += ['-i', source, '-vf', f'fps={fps},scale={w}:{h}', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-']
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     n = w * h * 3
@@ -172,9 +174,10 @@ def file_start_time(path):
 def check_file(path, base, det, step=2.0, progress=None, stop_at=None, start_at=None):
     """Checks an ordinary real-time video: one frame every `step` seconds, timed from `base`. Returns seconds covered."""
     det.reset(); k = 0
-    for k, fr in enumerate(frames(path, 1.0 / step)):
+    skip = max(0.0, (start_at or 0) - base)    # jump straight to the search window instead of decoding up to it
+    base += skip
+    for k, fr in enumerate(frames(path, 1.0 / step, seek=skip)):
         t = base + k * step
-        if start_at and t < start_at: continue
         if stop_at and t > stop_at: break
         det.feed(fr, t)
         if progress and k % 20 == 0: progress(t)
@@ -327,47 +330,76 @@ def tapo_history(a, det, cfg):
 
 
 # ---------- Hikvision cameras and recorders (ISAPI, Hikvision's published interface) ----------
-def _hik_time(ts):            # many Hikvision devices read these times as their own local clock, despite the "Z"
-    return datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%dT%H:%M:%SZ')
-def _hik_parse(v):
-    return time.mktime(time.strptime(v.strip().replace('Z', '')[:19], '%Y-%m-%dT%H:%M:%S'))
+def _hik_offset(cfg, auth):
+    """The camera's UTC offset in seconds, from its own clock settings, or None if it does not say."""
+    import requests
+    try:
+        r = requests.get(_hik_base(cfg) + '/ISAPI/System/time', auth=auth, timeout=10)
+        m = re.search(r'<localTime>[^<]*?(Z|[+-]\d{2}:?\d{2})\s*</localTime>', r.text)
+        if r.ok and m:
+            z = m.group(1)
+            if z == 'Z': return 0
+            sign = -1 if z[0] == '-' else 1; hh, mm = int(z[1:3]), int(z[-2:])
+            return sign * (hh * 3600 + mm * 60)
+    except Exception:
+        pass
+    return None
+def _hik_base(cfg): return (cfg.get('isapi') or f"http://{cfg['ip']}").rstrip('/')
+def _hik_channel(cfg):
+    m = re.search(r'Channels/(\d+?)0[12]\b', cfg.get('source') or '')
+    return int(cfg.get('channel') or (m.group(1) if m else 1))
+def _hik_time(ts, off):
+    """Hikvision search times are the camera's own wall clock, written with a "Z" (most firmware reads them that way)."""
+    if off is None: return datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%dT%H:%M:%SZ')
+    return datetime.datetime.utcfromtimestamp(ts + off).strftime('%Y-%m-%dT%H:%M:%SZ')
+def _hik_parse(v, off):
+    import calendar
+    v = v.strip()
+    m = re.match(r'(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?([+-]\d{2}:?\d{2})?', v)
+    naive = time.strptime(m.group(1), '%Y-%m-%dT%H:%M:%S')
+    if m.group(2):                                # an explicit offset is unambiguous
+        z = m.group(2); sign = -1 if z[0] == '-' else 1
+        return calendar.timegm(naive) - sign * (int(z[1:3]) * 3600 + int(z[-2:]) * 60)
+    if off is None: return time.mktime(naive)     # camera clock assumed to match this computer
+    return calendar.timegm(naive) - off           # camera wall clock -> real time
 def hik_recordings(cfg, frm, to):
     """Lists recorded segments (start, end, playbackURI) for one channel between frm and to."""
     import requests, uuid
     from requests.auth import HTTPDigestAuth
-    from xml.sax.saxutils import escape
-    base = cfg.get('isapi') or f"http://{cfg['ip']}"
+    from xml.sax.saxutils import unescape
     auth = HTTPDigestAuth(cfg.get('user', 'admin'), cfg['pw'])
-    track = f"{int(cfg.get('channel', 1))}01"
-    items, pos = [], 0
-    while True:
+    off = _hik_offset(cfg, auth)
+    track = f"{_hik_channel(cfg)}01"
+    sid = str(uuid.uuid4()).upper()               # the same searchID for every page of one search
+    items, seen, pos = [], set(), 0
+    for _ in range(200):                          # at most 10,000 recordings; never loop forever
         body = ('<?xml version="1.0" encoding="utf-8"?><CMSearchDescription>'
-                f'<searchID>{uuid.uuid4()}</searchID><trackList><trackID>{track}</trackID></trackList>'
-                f'<timeSpanList><timeSpan><startTime>{_hik_time(frm)}</startTime><endTime>{_hik_time(to)}</endTime></timeSpan></timeSpanList>'
+                f'<searchID>{sid}</searchID><trackList><trackID>{track}</trackID></trackList>'
+                f'<timeSpanList><timeSpan><startTime>{_hik_time(frm, off)}</startTime><endTime>{_hik_time(to, off)}</endTime></timeSpan></timeSpanList>'
                 f'<maxResults>50</maxResults><searchResultPostion>{pos}</searchResultPostion>'
                 '<metadataList><metadataDescriptor>//recordType.meta.std-cgi.com</metadataDescriptor></metadataList></CMSearchDescription>')
-        r = requests.post(base + '/ISAPI/ContentMgmt/search', data=body.encode(), auth=auth, timeout=30,
+        r = requests.post(_hik_base(cfg) + '/ISAPI/ContentMgmt/search', data=body.encode(), auth=auth, timeout=30,
                           headers={'Content-Type': 'application/xml'})
         if r.status_code == 401: raise RuntimeError('the camera refused the username or password')
         r.raise_for_status()
         txt = r.text
         found = re.findall(r'<searchMatchItem>(.*?)</searchMatchItem>', txt, re.S)
+        new = 0
         for it in found:
             s = re.search(r'<startTime>([^<]+)</startTime>', it); e = re.search(r'<endTime>([^<]+)</endTime>', it)
             u = re.search(r'<playbackURI>([^<]+)</playbackURI>', it)
             if s and e and u:
-                from xml.sax.saxutils import unescape
-                items.append((_hik_parse(s.group(1)), _hik_parse(e.group(1)), unescape(u.group(1))))
+                key = (_hik_parse(s.group(1), off), _hik_parse(e.group(1), off), unescape(u.group(1)))
+                if key not in seen: seen.add(key); items.append(key); new += 1
         pos += len(found)
-        if 'MORE' not in txt or not found: break
-    return sorted(set(items))
+        if 'MORE' not in txt or not new: break
+    return sorted(items)
 def hik_download(cfg, uri, path):
     import requests
     from requests.auth import HTTPDigestAuth
     from xml.sax.saxutils import escape
-    base = cfg.get('isapi') or f"http://{cfg['ip']}"
     body = f'<?xml version="1.0" encoding="utf-8"?><downloadRequest><playbackURI>{escape(uri)}</playbackURI></downloadRequest>'
-    with requests.get(base + '/ISAPI/ContentMgmt/download', data=body.encode(), stream=True, timeout=60,
+    with requests.get(_hik_base(cfg) + '/ISAPI/ContentMgmt/download', data=body.encode(), stream=True, timeout=60,
                       auth=HTTPDigestAuth(cfg.get('user', 'admin'), cfg['pw']), headers={'Content-Type': 'application/xml'}) as r:
         r.raise_for_status()
         with open(path, 'wb') as f:
@@ -389,17 +421,19 @@ def segment_history(a, det, label, lister, downloader):
     started = time.time()
     for n, (s, e, ref) in enumerate(items, 1):
         pr.P(msg=f'Downloading recording {n} of {len(items)} ({pr.fmt(s)})', pos=max(a.frm, s))
-        path = os.path.join(folder, f'rec_{int(s)}.mp4')
-        try:
-            path = downloader(ref, path)
-        except Exception as ex:
-            pr.act(f'Could not download the recording at {pr.fmt(s)}: ' + repr(ex)[:100]); continue
-        if not path: pr.act(f'Recording at {pr.fmt(s)} could not be downloaded (still being written?), skipped'); continue
+        path = os.path.join(folder, f'rec_{safe_name(a.cam or "cam", "cam")}_{os.getpid()}_{int(s)}.mp4')
         before = det.found
-        pr.P(msg=f'Checking recording {n} of {len(items)} ({pr.fmt(s)})')
-        check_file(path, s, det, step=1.0, stop_at=a.to, progress=lambda t: pr.P(pos=t), start_at=a.frm)
-        try: os.remove(path)
-        except Exception: pass
+        try:
+            try:
+                got = downloader(ref, path)
+            except Exception as ex:
+                pr.act(f'Could not download the recording at {pr.fmt(s)}: ' + repr(ex)[:100]); continue
+            if not got: pr.act(f'Recording at {pr.fmt(s)} could not be downloaded (still being written?), skipped'); continue
+            pr.P(msg=f'Checking recording {n} of {len(items)} ({pr.fmt(s)})')
+            check_file(got, s, det, step=1.0, stop_at=a.to, progress=lambda t: pr.P(pos=t), start_at=a.frm)
+        finally:
+            try: os.remove(path)
+            except Exception: pass
         el = time.time() - started; cov = max(1, min(e, a.to) - a.frm)
         pr.P(pos=min(e, a.to), eta=max(0, (a.to - min(e, a.to)) * el / cov))
         pr.act(f'Checked {pr.fmt(max(s, a.frm))} - {pr.fmt(min(e, a.to))}: ' + (plural(det.found - before, 'possible cat') if det.found - before else 'no cats'))

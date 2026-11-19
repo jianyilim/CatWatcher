@@ -232,8 +232,10 @@ def connect(d):
     if not pw: return {'ok': False, 'msg': 'Please type the camera password.'}
     t, ok = tries_ok(ip)
     if not ok: return {'ok': False, 'msg': 'Stopped after 3 wrong tries so the camera does not lock you out. Wait 30 minutes and check the password.'}
-    try: url = S.try_rtsp(ip, user, pw, d.get('brand', ''))
+    try: url, why = S.probe_rtsp(ip, user, pw, d.get('brand', ''))
     except Exception as ex: return {'ok': False, 'msg': 'Could not test the camera: ' + repr(ex)[:80]}
+    if not url and why == 'timeout':           # no login happened, so this does not count as a wrong try
+        return {'ok': False, 'msg': 'The camera did not answer in time. It may be busy; try again in a minute. This did not count as a wrong password.'}
     if not url:
         t[ip].append(time.time()); json.dump(t, open(TRIES, 'w'))
         return {'ok': False, 'msg': f'Could not open the video. The password may be wrong, or the camera has no RTSP account yet. {3 - len(t[ip])} tries left.'}
