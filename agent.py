@@ -55,12 +55,23 @@ def plural(n, word): return f'{n} {word}' + ('' if n == 1 else 's')
 def safe_name(n, fallback='camera'):
     return re.sub(r'[^A-Za-z0-9_-]+', '-', n).strip('-') or fallback
 
+CHILDREN = []
+def _close_children(*_):
+    for c in CHILDREN:
+        try:
+            if c.poll() is None: c.kill()
+        except Exception: pass
+import atexit, signal
+atexit.register(_close_children)
+try: signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))   # stopping runs the clean-up above
+except Exception: pass
+
 def frames(source, fps, w=1280, h=720, seek=0):
     cmd = ['ffmpeg', '-v', 'error']
     if source.lower().startswith('rtsp'): cmd += ['-rtsp_transport', 'tcp']
     if seek > 0: cmd += ['-ss', f'{seek:.3f}']
     cmd += ['-i', source, '-vf', f'fps={fps},scale={w}:{h}', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-']
-    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL); CHILDREN.append(p)
     n = w * h * 3
     try:
         while True:
@@ -481,6 +492,7 @@ def history(a, det, cfg):
         P(msg=f'Receiving recordings from {fmt(base)} and checking them as they arrive')
         ff = subprocess.Popen(['ffmpeg', '-v', 'error', '-f', 'mpegts', '-i', 'pipe:0', '-vf', f'fps=2,scale={W}:{H}', '-pix_fmt', 'rgb24', '-f', 'rawvideo', '-'],
                               stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        CHILDREN.append(ff)
         res = {}
         def feed_input():
             try:
