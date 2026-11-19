@@ -302,7 +302,8 @@ def connect(d):
     if not url:
         t[ip].append(time.time()); json.dump(t, open(TRIES, 'w'))
         return {'ok': False, 'msg': f'Could not open the video. The password may be wrong, or the camera has no RTSP account yet. {3 - len(t[ip])} tries left.'}
-    c = load(); ex = next((x for x in c['cams'] if x['ip'] == ip), None)
+    hik = 'Hikvision' in d.get('brand', '')
+    c = load(); ex = next((x for x in c['cams'] if x['ip'] == ip and (not hik or int(x.get('channel') or 1) == ch)), None)   # a recorder has one entry per channel
     if ex is None:
         n = 1
         while cam(c, f'cam{n}'): n += 1
